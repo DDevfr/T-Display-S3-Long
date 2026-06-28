@@ -22,23 +22,25 @@ Les métriques sont envoyées du NUC vers l'ESP32 via USB-Serial (CSV) par le sc
 
 ```
 ┌──────────────────────────────────────┐
-│ Olympe |||..           VPN ON        │  ← Header : WiFi (SSID + barres)
+│ Olympe |||..                  VPN ON │  ← Header : WiFi (SSID + barres)
 │ 56%                                  │  ← % signal WiFi (font_12, coloré)
 ├──────────────────────────────────────┤
-│         Arc CPU  %  °C              │  ← CPU % (font_20) + °C, couleur dynamique
+│         Arc CPU  %  °C               │  ← CPU % (font_20) + °C, couleur dynamique
 │            CPU                       │  ← Label + "Ryzen 9 7940HS" dessous
 ├──────────────────────────────────────┤
-│  Barres 16 cœurs (0-7 / 8-15)       │  ← 2 rangées × 8, numéros sous chaque barre
+│  Barres 16 cœurs (0-7 / 8-15)        │  ← 2 rangées × 8, numéros sous chaque barre
 ├──────────────────────────────────────┤
-│         Arc GPU  %  °C              │  ← GPU % + °C (Radeon 780M)
+│         Arc GPU  %  °C               │  ← GPU % + °C (Radeon 780M)
 │            GPU                       │  ← Label + "Radeon 780M" dessous
 ├──────────────────────────────────────┤
 │ RAM          14.3/62 GB              │  ← Label gauche, valeur droite, barre dessous
-│ VRAM          1.5/8 GB              │  ← Idem, VRAM iGPU
+| [════════]                           |
+│ VRAM          1.5/8 GB               │  ← Idem, VRAM iGPU
+| [════════]                           |
 ├──────────────────────────────────────┤
-│ SSD   38°C            123/1832 GB   │  ← Titre SSD : temp. centrée, capa. droite
-│ R [════════]  12 MB/s               │
-│ W [════════]   4 MB/s               │
+│ SSD   38°C               123/1832 GB │  ← Titre SSD : temp. centrée, capa. droite
+│ R [════════]  12 MB/s                │
+│ W [════════]   4 MB/s                │
 └──────────────────────────────────────┘
 ```
 
