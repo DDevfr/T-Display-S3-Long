@@ -1,0 +1,18 @@
+[Unit]
+Description=NUC Monitor — envoi métriques vers T-Display-S3-Long
+Documentation=https://github.com/Xinyuan-LilyGO/T-Display-S3-Long
+After=network.target
+
+[Service]
+Type=simple
+User=daniel
+Group=daniel
+WorkingDirectory=/home/daniel/Documents/T-Display-S3-Long/tools
+ExecStart=/usr/bin/python3 /home/daniel/Documents/T-Display-S3-Long/tools/monitor_sender.py
+Restart=always
+RestartSec=5
+StandardOutput=journal
+StandardError=journal
+
+[Install]
+WantedBy=multi-user.target
