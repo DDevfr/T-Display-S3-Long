@@ -74,8 +74,8 @@ lib/
 ## Métriques envoyées (protocole CSV)
 
 ```
-CPU:45.2,CTEMP:71,GPU:12.5,GTEMP:55,RAM:68.4,RTOT:62,
-SREAD:12.3,SWRIT:4.1,STEMP:38,SCAP:123,STOT:1832,
+CPU:45.2,CTEMP:71.0,GPU:12.5,GTEMP:55.0,RAM:68.4,RTOT:62.0,
+SREAD:12.3,SWRIT:4.1,STEMP:38.0,SCAP:123,STOT:1832,
 VUSED:1489,VTOT:8192,WNAM:Olympe,WSIG:56,VPN:1,
 C0:55,C1:12,...,C15:8
 ```
@@ -151,6 +151,58 @@ L'environnement `sys_monitor` dans `platformio.ini` active `-DARDUINO_USB_CDC_ON
 
 ---
 
+## Cycle de développement
+
+Procédure à suivre lorsque le service `nuc-monitor` est actif et qu'on souhaite modifier le code.
+
+| Modification | Arrêt service requis | Commandes après édition |
+|---|---|---|
+| `monitor_sender.py` | Oui | `systemctl start nuc-monitor` |
+| Firmware ESP32 | **Oui** (conflit port série) | `pio run … upload` puis `systemctl start` |
+| `nuc-monitor.service` | Non | `cp` + `daemon-reload` + `restart` |
+
+### Modifier le script Python (`monitor_sender.py`)
+
+VSCode peut éditer le fichier librement pendant que le service tourne, mais les changements
+ne sont actifs qu'après redémarrage du service.
+
+```bash
+sudo systemctl stop nuc-monitor        # arrêter le service
+# → éditer tools/monitor_sender.py dans VSCode
+python3 tools/monitor_sender.py        # test manuel optionnel (Ctrl+C pour arrêter)
+sudo systemctl start nuc-monitor       # relancer le service
+sudo journalctl -u nuc-monitor -f      # vérifier les logs
+```
+
+### Modifier le firmware ESP32 (`.ino` / `.cpp` / `.h`)
+
+**Obligatoire** d'arrêter le service avant le flash : il monopolise `/dev/ttyACM0` et
+PlatformIO ne peut pas accéder au port si le service est actif.
+
+```bash
+sudo systemctl stop nuc-monitor        # libère /dev/ttyACM0
+# → éditer examples/sys_monitor/ dans VSCode
+pio run -e sys_monitor -t upload       # compile + flash (depuis le terminal VSCode)
+# L'ESP32 reboot automatiquement après le flash (~5 s)
+sudo systemctl start nuc-monitor       # relancer le service
+sudo journalctl -u nuc-monitor -f      # vérifier les logs
+```
+
+### Modifier le fichier service (`nuc-monitor.service`)
+
+Pas besoin d'arrêter le service avant l'édition. Recopier le fichier vers systemd après
+modification car c'est la copie dans `/etc/systemd/system/` qui est utilisée au boot.
+
+```bash
+# → éditer tools/nuc-monitor.service dans VSCode
+sudo cp tools/nuc-monitor.service /etc/systemd/system/
+sudo systemctl daemon-reload
+sudo systemctl restart nuc-monitor
+sudo systemctl status nuc-monitor
+```
+
+---
+
 ## Points techniques notables
 
 - **HWCDC vs HardwareSerial** : l'ESP32-S3 expose `Serial` en HWCDC quand `ARDUINO_USB_CDC_ON_BOOT=1`. Sans ce flag, `Serial.available()` reste toujours à 0.
@@ -172,6 +224,17 @@ L'environnement `sys_monitor` dans `platformio.ini` active `-DARDUINO_USB_CDC_ON
 
 **La LED verte clignote sans batterie**
 → Normal ; le firmware envoie `reg 0x09 = 0x64` au BQ25896 pour l'éteindre au démarrage.
+
+**Le service systemd n'existe pas / n'a pas démarré après un reboot**
+→ Le script d'installation n'a pas encore été exécuté. Lancer une seule fois :
+```bash
+sudo bash tools/install-autostart.sh
+```
+Vérifier ensuite que le service est bien activé :
+```bash
+sudo systemctl is-enabled nuc-monitor   # doit afficher "enabled"
+sudo systemctl status nuc-monitor
+```
 
 **Le service systemd ne démarre pas**
 → `sudo journalctl -u nuc-monitor -f` pour voir les erreurs. Vérifier que l'ESP32 est branché ou laisser le service : il reconnecte automatiquement.
