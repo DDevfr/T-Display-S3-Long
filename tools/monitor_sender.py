@@ -462,8 +462,8 @@ def main() -> None:
     parser.add_argument("--port", default=None,
                         help="Port série (ex: /dev/ttyACM0). Auto-détecté si absent.")
     parser.add_argument("--baud",     type=int,   default=115200)
-    parser.add_argument("--interval", type=float, default=0.5,
-                        help="Intervalle d'envoi en secondes (défaut: 0.5)")
+    parser.add_argument("--interval", type=float, default=0.25,
+                        help="Intervalle d'envoi en secondes (défaut: 0.25)")
     args = parser.parse_args()
 
     port = args.port or auto_detect_port()

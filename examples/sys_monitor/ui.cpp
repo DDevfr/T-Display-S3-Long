@@ -464,9 +464,9 @@ void ui_update(const SysData *d) {
     lv_label_set_text_fmt(lbl_ssd_cap, "%d/%d GB",
                           (int)d->ssd_used_gb, (int)d->ssd_total_gb);
 
-    // SSD (cap à 1000 MB/s = 100%)
-    int read_pct  = (int)(d->ssd_read_mbps  / 10.0f + 0.5f);
-    int write_pct = (int)(d->ssd_write_mbps / 10.0f + 0.5f);
+    // SSD (cap à 500 MB/s = 100%)
+    int read_pct  = (int)(d->ssd_read_mbps  / 5.0f + 0.5f);
+    int write_pct = (int)(d->ssd_write_mbps / 5.0f + 0.5f);
     if (read_pct  > 100) read_pct  = 100;
     if (write_pct > 100) write_pct = 100;
 

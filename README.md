@@ -63,7 +63,9 @@ examples/sys_monitor/
 tools/
 ├── monitor_sender.py       # Script Python NUC → ESP32
 ├── nuc-monitor.service     # Fichier service systemd
-└── install-autostart.sh    # Script d'installation autostart pour linux
+├── install-autostart.sh    # Script d'installation autostart pour linux
+├── dev-mode.sh             # Arrête/relance le service pour développement ESP32
+└── deploy.sh               # Déploiement complet : arrêt → flash → redémarrage service
 
 lib/
 └── lv_conf.h           # Config LVGL (fonts activés)
@@ -112,7 +114,7 @@ pip install psutil pyserial
 ```bash
 python tools/monitor_sender.py                     # auto-détecte /dev/ttyACM*
 python tools/monitor_sender.py --port /dev/ttyACM0
-python tools/monitor_sender.py --interval 0.5      # rafraîchissement 0.5 s (défaut)
+python tools/monitor_sender.py --interval 0.25     # rafraîchissement 0.25 s (défaut)
 ```
 
 Le script effectue un preflight check au démarrage (port, CPU/GPU/SSD temp, WiFi, VPN, RAM, VRAM, SSD) et reconnecte automatiquement en cas de déconnexion USB.
@@ -153,52 +155,32 @@ L'environnement `sys_monitor` dans `platformio.ini` active `-DARDUINO_USB_CDC_ON
 
 ## Cycle de développement
 
-Procédure à suivre lorsque le service `nuc-monitor` est actif et qu'on souhaite modifier le code.
-
-| Modification | Arrêt service requis | Commandes après édition |
-|---|---|---|
-| `monitor_sender.py` | Oui | `systemctl start nuc-monitor` |
-| Firmware ESP32 | **Oui** (conflit port série) | `pio run … upload` puis `systemctl start` |
-| `nuc-monitor.service` | Non | `cp` + `daemon-reload` + `restart` |
-
-### Modifier le script Python (`monitor_sender.py`)
-
-VSCode peut éditer le fichier librement pendant que le service tourne, mais les changements
-ne sont actifs qu'après redémarrage du service.
+### Déploiement rapide (cas normal)
 
 ```bash
-sudo systemctl stop nuc-monitor        # arrêter le service
-# → éditer tools/monitor_sender.py dans VSCode
-python3 tools/monitor_sender.py        # test manuel optionnel (Ctrl+C pour arrêter)
-sudo systemctl start nuc-monitor       # relancer le service
-sudo journalctl -u nuc-monitor -f      # vérifier les logs
+# Firmware modifié (ou firmware + Python) :
+bash tools/deploy.sh
+
+# Python uniquement (monitor_sender.py) — pas besoin de reflasher :
+bash tools/deploy.sh --no-flash
 ```
 
-### Modifier le firmware ESP32 (`.ino` / `.cpp` / `.h`)
+`deploy.sh` enchaîne automatiquement : arrêt du service → flash ESP32 → mise à jour
+du fichier service si modifié → redémarrage. Affiche le statut systemd à la fin.
 
-**Obligatoire** d'arrêter le service avant le flash : il monopolise `/dev/ttyACM0` et
-PlatformIO ne peut pas accéder au port si le service est actif.
+### Développement interactif (test manuel du script Python)
 
 ```bash
-sudo systemctl stop nuc-monitor        # libère /dev/ttyACM0
-# → éditer examples/sys_monitor/ dans VSCode
-pio run -e sys_monitor -t upload       # compile + flash (depuis le terminal VSCode)
-# L'ESP32 reboot automatiquement après le flash (~5 s)
-sudo systemctl start nuc-monitor       # relancer le service
-sudo journalctl -u nuc-monitor -f      # vérifier les logs
+sudo bash tools/dev-mode.sh            # arrête le service, libère /dev/ttyACM0
+python3 tools/monitor_sender.py        # test manuel (Ctrl+C pour arrêter)
+sudo bash tools/dev-mode.sh resume     # relancer le service
 ```
 
-### Modifier le fichier service (`nuc-monitor.service`)
-
-Pas besoin d'arrêter le service avant l'édition. Recopier le fichier vers systemd après
-modification car c'est la copie dans `/etc/systemd/system/` qui est utilisée au boot.
+### Commandes utiles
 
 ```bash
-# → éditer tools/nuc-monitor.service dans VSCode
-sudo cp tools/nuc-monitor.service /etc/systemd/system/
-sudo systemctl daemon-reload
-sudo systemctl restart nuc-monitor
-sudo systemctl status nuc-monitor
+sudo systemctl status nuc-monitor      # état du service
+sudo journalctl -u nuc-monitor -f      # logs en direct
 ```
 
 ---
@@ -211,6 +193,9 @@ sudo systemctl status nuc-monitor
 - **VRAM source** : `/sys/class/drm/card1/device/mem_info_vram_used` et `mem_info_vram_total` (driver amdgpu, pas besoin de ROCm).
 - **Temp NVMe** : `/sys/class/nvme/nvme0/hwmon*/temp1_input` (millidegrés → divisé par 1000).
 - **VPN detection** : `psutil.net_if_stats()` — toute interface contenant `tun`, `tap`, `vpn` ou `wg` et marquée UP est considérée VPN actif (couvre `qtun`, `tun0`, `wg0`, etc.).
+- **Rétroéclairage PWM** : backlight sur `TFT_BL` (GPIO 1) via LEDC, canal 0, 5 kHz, 8-bit. `BL_BRIGHTNESS = 153` ≈ 60 % dans `sys_monitor.ino` — modifier cette valeur pour ajuster la luminosité (0–255).
+- **Échelle barres SSD** : 500 MB/s = 100 % (diviseur `5.0f` dans `ui.cpp`). La valeur numérique affichée reste en MB/s réels ; le cap à 100 % gère les débits supérieurs.
+- **Intervalle polling Python** : 0.25 s par défaut dans `monitor_sender.py`. Configurable via `--interval`.
 
 ---
 

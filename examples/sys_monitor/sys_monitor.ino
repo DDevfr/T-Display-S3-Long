@@ -131,8 +131,12 @@ void setup() {
     Wire.write(0x09); Wire.write(0x64);
     Wire.endTransmission();
 
-    pinMode(TFT_BL, OUTPUT);
-    digitalWrite(TFT_BL, HIGH);
+    // Rétroéclairage à 60 % via PWM (5 kHz, 8-bit) pour préserver la LED
+    #define BL_PWM_CHANNEL 0
+    #define BL_BRIGHTNESS  153   // 0–255 ; 153 ≈ 60 %
+    ledcSetup(BL_PWM_CHANNEL, 5000, 8);
+    ledcAttachPin(TFT_BL, BL_PWM_CHANNEL);
+    ledcWrite(BL_PWM_CHANNEL, BL_BRIGHTNESS);
 
     axs15231_init();
     lv_init();
