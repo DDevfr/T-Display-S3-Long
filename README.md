@@ -22,16 +22,17 @@ Les métriques sont envoyées du NUC vers l'ESP32 via USB-Serial (CSV) par le sc
 
 ```
 ┌──────────────────────────────────────┐
-│ Olympe |||..                  VPN ON │  ← Header : WiFi (SSID + barres, font_12)
-│ 56%                                  │  ← % signal WiFi (font_14, coloré)
-├──────────────────────────────────────┤
+│ Olympe |||..                  VPN ON │  ← ligne 1 : SSID + barres (font_12) | VPN (font_12)
+│ 512 KB/s                    14h 09m  │  ← ligne 2 : débit réseau (font_12) | uptime (font_12)
+├──────────────────────────────────────┤  ← séparateur header / CPU
 │         Arc CPU  %  °C               │  ← CPU % (font_20) + °C, couleur dynamique
-│            CPU                       │  ← Label + "Ryzen 9 7940HS" dessous
+│            3.2 GHz                   │  ← fréquence CPU (font_10)
+│     CPU  ·  Ryzen 9 7940HS           │  ← labels fixes (font_8)
 ├──────────────────────────────────────┤
-│  Barres 16 cœurs (0-7 / 8-15)        │  ← 2 rangées × 8, numéros sous chaque barre
+│  Barres 16 cœurs (0-7 / 8-15)        │  ← 2 rangées × 8, numéros colorés sous chaque barre
 ├──────────────────────────────────────┤
 │         Arc GPU  %  °C               │  ← GPU % + °C (Radeon 780M)
-│            GPU                       │  ← Label + "Radeon 780M" dessous
+│            GPU                       │  ← "GPU" + "Radeon 780M" dessous
 ├──────────────────────────────────────┤
 │ RAM          14/62 GB                │  ← Label gauche, valeur droite, barre dessous
 | [════════]                           |
@@ -48,8 +49,10 @@ Les métriques sont envoyées du NUC vers l'ESP32 via USB-Serial (CSV) par le sc
 **Couleurs dynamiques** (tous les widgets) :
 - Pourcentage : < 50 % → vert · < 70 % → jaune · < 85 % → orange · ≥ 85 % → rouge
 - Température CPU/GPU : < 60 °C → vert · < 75 °C → jaune · < 85 °C → orange · ≥ 85 °C → rouge
-- Signal WiFi : ≥ 70 % → vert · ≥ 40 % → orange · < 40 % → rouge
+- Signal WiFi : ≥ 70 % → colore le SSID en vert · ≥ 40 % → orange · < 40 % → rouge
 - VPN : actif → vert · inactif → gris
+- % CPU et GPU : affichés en bleu (`CLR_GPU`)
+- Numéros de cœurs : colorés selon leur activité (même couleur que la barre, > 5 %)
 
 ---
 
@@ -81,6 +84,7 @@ CPU:65,CTEMP:78,GPU:23,GTEMP:62,RAM:68,RTOT:62,
 SREAD:51200,SWRIT:20480,STEMP:38,SCAP:123,STOT:1832,
 S2TMP:0,S2CAP:480,S2TOT:1863,
 VUSED:1489,VTOT:8192,WNAM:Olympe,WSIG:56,VPN:1,
+NTOT:512,CFRQ:32,CPWR:45,UPTS:50998,
 CX:55;12;8;6;4;3;2;1;78;45;12;8;5;3;2;1
 ```
 
@@ -99,8 +103,12 @@ CX:55;12;8;6;4;3;2;1;78;45;12;8;5;3;2;1
 | `S2CAP` / `S2TOT` | Espace utilisé / total SSD2 en GB |
 | `VUSED` / `VTOT` | VRAM utilisée / totale en MB (sysfs amdgpu) |
 | `WNAM` | SSID WiFi (max 8 chars, sanitisé) |
-| `WSIG` | Qualité signal WiFi % (nmcli) |
+| `WSIG` | Qualité signal WiFi % (nmcli) — colore le SSID, non affiché en chiffre |
 | `VPN` | VPN actif : 1 / inactif : 0 (interface tun/wg détectée) |
+| `NTOT` | Débit réseau total lissé en KB/s (upload + download, EMA α=0.25, interface WiFi) |
+| `CFRQ` | Fréquence CPU moyenne × 10 (ex: `32` = 3.2 GHz, `psutil.cpu_freq()`) |
+| `CPWR` | Puissance CPU en Watts via RAPL (0 si non lisible sans root) |
+| `UPTS` | Uptime système en secondes (`time.time() − psutil.boot_time()`) |
 | `CX` | 16 valeurs % par cœur séparées par `;` (ex: `CX:55;12;8;...;1`) |
 
 > **Note SSD2** : le pont USB-SATA ASMedia ASM235C (driver `uas`) ne remonte pas les lectures dans `/proc/diskstats`. La gauge de débit est donc absente pour SSD2 — seules la capacité et la température (toujours `--°C` côté USB) sont affichées.
@@ -196,7 +204,10 @@ sudo journalctl -u nuc-monitor -f      # logs en direct
 - **HWCDC vs HardwareSerial** : l'ESP32-S3 expose `Serial` en HWCDC quand `ARDUINO_USB_CDC_ON_BOOT=1`. Sans ce flag, `Serial.available()` reste toujours à 0.
 - **Buffer série HWCDC** : le buffer RX logiciel est étendu à 512 octets via `Serial.setRxBufferSize(512)` (défaut = 256). Les buffers de `serial_parser.h` sont également à 512 octets. Le script Python tronque les lignes dépassant 510 octets avant envoi. En cas de ligne trop longue côté firmware, `serial_read_line()` rejette la ligne entière (flag `overflow`) plutôt que de parser des données tronquées.
 - **Double-open série** : l'ouverture de `/dev/ttyACM0` sous Linux déclenche un reset USB-JTAG. Le script ouvre deux fois le port (drain + close entre les deux) pour obtenir une session cdc-acm propre.
-- **Protocole compact** : les 16 cœurs CPU sont encodés dans un seul champ `CX:v;v;...;v` (séparateur `;`) au lieu de 16 champs `C0`…`C15`. Les débits SSD sont en KB/s entier (pas en MB/s décimal) pour une meilleure précision sub-MB/s. Taille typique d'un message : ~234 octets.
+- **Protocole compact** : les 16 cœurs CPU sont encodés dans un seul champ `CX:v;v;...;v` (séparateur `;`) au lieu de 16 champs `C0`…`C15`. Les débits SSD sont en KB/s entier (pas en MB/s décimal) pour une meilleure précision sub-MB/s. Taille typique d'un message : ~280 octets (max ~295 octets, sous les 510 du buffer).
+- **Débit réseau EMA** : `get_net_avg_kbps()` calcule le total upload + download sur l'interface WiFi (`wl*`) et le lisse via une moyenne exponentielle (α=0.25 ≈ constante de temps ~1 s). Affiché en KB/s ou MB/s selon le débit, identique à un indicateur de copie de fichier.
+- **Fréquence CPU** : `psutil.cpu_freq()` retourne la fréquence courante en MHz ; transmise × 10 pour conserver une décimale entière (ex: 32 = 3.2 GHz). Décodée côté firmware avec division entière.
+- **Puissance CPU RAPL** : `/sys/class/powercap/intel-rapl:0/energy_uj` — lecture root uniquement par défaut. Retourne 0 si non accessible ; l'affichage s'adapte (`X.X GHz` seul, sans `XXW`). Pour l'activer sans root : `SUBSYSTEM=="powercap", ACTION=="add", RUN+="/bin/chmod o+r /sys/class/powercap/intel-rapl:0/energy_uj"` dans `/etc/udev/rules.d/99-rapl.rules`.
 - **LVGL %f** : `lv_snprintf` (LVGL 8.3) ne supporte pas `%f`. Toutes les valeurs float sont converties en entiers avant formatage (`(int)(val + 0.5f)`).
 - **VRAM source** : `/sys/class/drm/card1/device/mem_info_vram_used` et `mem_info_vram_total` (driver amdgpu, pas besoin de ROCm).
 - **Temp NVMe** : `/sys/class/nvme/nvme0/hwmon*/temp1_input` (millidegrés → divisé par 1000).
