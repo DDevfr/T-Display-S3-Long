@@ -42,10 +42,13 @@ static lv_obj_t *lbl_ssd_r,  *lbl_ssd_w,  *bar_ssd,  *lbl_ssd_spd;
 static lv_obj_t *lbl_ssd2_temp, *lbl_ssd2_cap;
 
 static lv_obj_t *bars_core[16];
+static lv_obj_t *lbls_core[16];
 
 static lv_obj_t *lbl_wifi;
-static lv_obj_t *lbl_wifi_pct;
 static lv_obj_t *lbl_vpn;
+static lv_obj_t *lbl_net;
+static lv_obj_t *lbl_uptime;
+static lv_obj_t *lbl_cpu_info;
 
 static lv_obj_t *lbl_nosignal;
 
@@ -132,12 +135,27 @@ void ui_init(void) {
     lv_obj_set_style_text_font(lbl_vpn, &lv_font_montserrat_12, 0);
     lv_obj_align(lbl_vpn, LV_ALIGN_TOP_RIGHT, -4, 2);
 
-    // Ligne 2 : % WiFi (gauche, font_14, coloré)
-    lbl_wifi_pct = lv_label_create(hdr);
-    lv_label_set_text(lbl_wifi_pct, "--%");
-    lv_obj_set_style_text_color(lbl_wifi_pct, CLR_TEXT, 0);
-    lv_obj_set_style_text_font(lbl_wifi_pct, &lv_font_montserrat_14, 0);
-    lv_obj_set_pos(lbl_wifi_pct, 4, 22);
+    // Ligne 2 gauche : réseau (LV_SYMBOL_UP/DOWN, font_12)
+    lbl_net = lv_label_create(hdr);
+    lv_label_set_text(lbl_net, "-- KB/s");
+    lv_obj_set_style_text_color(lbl_net, CLR_GRAY, 0);
+    lv_obj_set_style_text_font(lbl_net, &lv_font_montserrat_12, 0);
+    lv_obj_set_pos(lbl_net, 4, 24);
+
+    // Ligne 2 droite : uptime (font_12, même ligne que lbl_net)
+    lbl_uptime = lv_label_create(hdr);
+    lv_label_set_text(lbl_uptime, "--h --m");
+    lv_obj_set_style_text_color(lbl_uptime, CLR_GRAY, 0);
+    lv_obj_set_style_text_font(lbl_uptime, &lv_font_montserrat_12, 0);
+    lv_obj_align(lbl_uptime, LV_ALIGN_TOP_RIGHT, -4, 24);
+
+    // Séparateur header / CPU
+    lv_obj_t *sep_hdr = lv_obj_create(scr);
+    lv_obj_set_size(sep_hdr, SCR_W - 20, 1);
+    lv_obj_set_pos(sep_hdr, 10, Y_CPU);
+    lv_obj_set_style_bg_color(sep_hdr, CLR_DIM, 0);
+    lv_obj_set_style_border_width(sep_hdr, 0, 0);
+    lv_obj_set_style_radius(sep_hdr, 0, 0);
 
     // ── CPU section ──────────────────────────────────────────────────────────
     // Arc (170px zone → arc 120px centré)
@@ -146,7 +164,7 @@ void ui_init(void) {
     // % utilisation (grand, centre)
     lbl_cpu_pct = lv_label_create(scr);
     lv_label_set_text(lbl_cpu_pct, "--%");
-    lv_obj_set_style_text_color(lbl_cpu_pct, CLR_TEXT, 0);
+    lv_obj_set_style_text_color(lbl_cpu_pct, CLR_GPU, 0);
     lv_obj_set_style_text_font(lbl_cpu_pct, &lv_font_montserrat_20, 0);
     lv_obj_set_style_text_align(lbl_cpu_pct, LV_TEXT_ALIGN_CENTER, 0);
     lv_obj_align_to(lbl_cpu_pct, arc_cpu, LV_ALIGN_CENTER, 0, -8);
@@ -159,25 +177,33 @@ void ui_init(void) {
     lv_obj_set_style_text_align(lbl_cpu_temp, LV_TEXT_ALIGN_CENTER, 0);
     lv_obj_align_to(lbl_cpu_temp, arc_cpu, LV_ALIGN_CENTER, 0, +14);
 
+    // Fréquence + puissance CPU (entre °C et "CPU")
+    lbl_cpu_info = lv_label_create(scr);
+    lv_label_set_text(lbl_cpu_info, "-- GHz");
+    lv_obj_set_style_text_color(lbl_cpu_info, lv_color_hex(0x666666), 0);
+    lv_obj_set_style_text_font(lbl_cpu_info, &lv_font_montserrat_10, 0);
+    lv_obj_set_style_text_align(lbl_cpu_info, LV_TEXT_ALIGN_CENTER, 0);
+    lv_obj_align_to(lbl_cpu_info, arc_cpu, LV_ALIGN_CENTER, 0, +30);
+
     // "CPU" dans le gap bas de l'arc (zone sans trait, 90° en bas)
     lv_obj_t *lbl_cpu_name = lv_label_create(scr);
     lv_label_set_text(lbl_cpu_name, "CPU");
     lv_obj_set_style_text_color(lbl_cpu_name, lv_color_hex(0x888888), 0);
-    lv_obj_set_style_text_font(lbl_cpu_name, &lv_font_montserrat_10, 0);
+    lv_obj_set_style_text_font(lbl_cpu_name, &lv_font_montserrat_8, 0);
     lv_obj_set_style_text_align(lbl_cpu_name, LV_TEXT_ALIGN_CENTER, 0);
-    lv_obj_align_to(lbl_cpu_name, arc_cpu, LV_ALIGN_CENTER, 0, +38);
+    lv_obj_align_to(lbl_cpu_name, arc_cpu, LV_ALIGN_CENTER, 0, +44);
 
     lv_obj_t *lbl_cpu_model = lv_label_create(scr);
     lv_label_set_text(lbl_cpu_model, "Ryzen 9 7940HS");
     lv_obj_set_style_text_color(lbl_cpu_model, lv_color_hex(0x666666), 0);
     lv_obj_set_style_text_font(lbl_cpu_model, &lv_font_montserrat_8, 0);
     lv_obj_set_style_text_align(lbl_cpu_model, LV_TEXT_ALIGN_CENTER, 0);
-    lv_obj_align_to(lbl_cpu_model, arc_cpu, LV_ALIGN_CENTER, 0, +51);
+    lv_obj_align_to(lbl_cpu_model, arc_cpu, LV_ALIGN_CENTER, 0, +55);
 
-    // Séparateur
+    // Séparateur (décalé +4 px pour laisser 3 px sous "Ryzen 9")
     lv_obj_t *sep1 = lv_obj_create(scr);
     lv_obj_set_size(sep1, SCR_W - 20, 1);
-    lv_obj_set_pos(sep1, 10, Y_CPU + 133);
+    lv_obj_set_pos(sep1, 10, Y_CPU + 137);
     lv_obj_set_style_bg_color(sep1, CLR_DIM, 0);
     lv_obj_set_style_border_width(sep1, 0, 0);
     lv_obj_set_style_radius(sep1, 0, 0);
@@ -232,6 +258,7 @@ void ui_init(void) {
         lv_obj_set_style_text_color(lbl_n, lv_color_hex(0x666666), 0);
         lv_obj_set_style_text_font(lbl_n, &lv_font_montserrat_8, 0);
         lv_obj_set_pos(lbl_n, bx + 2, by + BAR_MAXH + 2);
+        lbls_core[i] = lbl_n;
     }
 
     // Séparateur
@@ -248,7 +275,7 @@ void ui_init(void) {
     // % utilisation (grand, centre)
     lbl_gpu_pct = lv_label_create(scr);
     lv_label_set_text(lbl_gpu_pct, "--%");
-    lv_obj_set_style_text_color(lbl_gpu_pct, CLR_TEXT, 0);
+    lv_obj_set_style_text_color(lbl_gpu_pct, CLR_GPU, 0);
     lv_obj_set_style_text_font(lbl_gpu_pct, &lv_font_montserrat_20, 0);
     lv_obj_set_style_text_align(lbl_gpu_pct, LV_TEXT_ALIGN_CENTER, 0);
     lv_obj_align_to(lbl_gpu_pct, arc_gpu, LV_ALIGN_CENTER, 0, -7);
@@ -354,8 +381,8 @@ void ui_init(void) {
     lv_obj_set_pos(lbl_ssd_cap, 8, Y_RAM + 65);
 
     lbl_ssd_r = make_label(scr, "R", CLR_GRAY, &lv_font_montserrat_10,  8, Y_RAM + 81);
-    make_label(scr, "-", lv_color_hex(0x555555), &lv_font_montserrat_10, 14, Y_RAM + 81);
-    lbl_ssd_w = make_label(scr, "W", CLR_GRAY, &lv_font_montserrat_10, 20, Y_RAM + 81);
+    make_label(scr, "-", lv_color_hex(0x555555), &lv_font_montserrat_10, 15, Y_RAM + 81);
+    lbl_ssd_w = make_label(scr, "W", CLR_GRAY, &lv_font_montserrat_10, 21, Y_RAM + 81);
     bar_ssd = lv_bar_create(scr);
     lv_bar_set_range(bar_ssd, 0, 100);
     lv_bar_set_value(bar_ssd, 0, LV_ANIM_OFF);
@@ -418,13 +445,27 @@ void ui_update(const SysData *d) {
     if (bars > 5) bars = 5;
     char bar_str[6] = ".....";
     for (int i = 0; i < bars; i++) bar_str[i] = '|';
-    lv_label_set_text_fmt(lbl_wifi,     "%s %s",  d->wifi_ssid, bar_str);
-    lv_label_set_text_fmt(lbl_wifi_pct, "%d%%", (int)d->wifi_sig);
+    lv_label_set_text_fmt(lbl_wifi, "%s %s", d->wifi_ssid, bar_str);
     lv_color_t wc = (d->wifi_sig >= 70) ? lv_color_hex(0x00C87A) :
                     (d->wifi_sig >= 40) ? lv_color_hex(0xFF8C00) :
                                           lv_color_hex(0xFF2222);
-    lv_obj_set_style_text_color(lbl_wifi,     wc, 0);
-    lv_obj_set_style_text_color(lbl_wifi_pct, wc, 0);
+    lv_obj_set_style_text_color(lbl_wifi, wc, 0);
+
+    // Débit réseau total lissé (EMA, upload + download)
+    { int t = (int)d->net_total_kbps;
+      if (t >= 1024) {
+          int mb  = t / 1024;
+          int dec = (t % 1024) * 10 / 1024;
+          lv_label_set_text_fmt(lbl_net, "%d.%d MB/s", mb, dec);
+      } else {
+          lv_label_set_text_fmt(lbl_net, "%d KB/s", t);
+      } }
+
+    // Uptime
+    { uint32_t u = d->uptime_s;
+      int da = (int)(u / 86400), h = (int)((u % 86400) / 3600), m = (int)((u % 3600) / 60);
+      if (da > 0) lv_label_set_text_fmt(lbl_uptime, "%dj %dh", da, h);
+      else        lv_label_set_text_fmt(lbl_uptime, "%dh %dm", h, m); }
     if ((int)d->vpn_on) {
         lv_label_set_text(lbl_vpn, "VPN ON");
         lv_obj_set_style_text_color(lbl_vpn, lv_color_hex(0x00C87A), 0);
@@ -440,6 +481,15 @@ void ui_update(const SysData *d) {
     lv_label_set_text_fmt(lbl_cpu_pct, "%d%%", (int)(d->cpu_pct + 0.5f));
     lv_label_set_text_fmt(lbl_cpu_temp, "%d\xc2\xb0""C", (int)(d->cpu_temp + 0.5f));
     lv_obj_set_style_text_color(lbl_cpu_temp, temp_color(d->cpu_temp), 0);
+
+    // CPU fréquence + puissance (lv_snprintf ne supporte pas %f)
+    { int fwh = (int)d->cpu_freq_ghz;
+      int fde = (int)((d->cpu_freq_ghz - fwh) * 10 + 0.5f);
+      if (d->cpu_power_w > 0)
+          lv_label_set_text_fmt(lbl_cpu_info, "%d.%d GHz  %dW",
+              fwh, fde, (int)d->cpu_power_w);
+      else
+          lv_label_set_text_fmt(lbl_cpu_info, "%d.%d GHz", fwh, fde); }
 
     // GPU arc + labels
     lv_arc_set_value(arc_gpu, (int32_t)d->gpu_pct);
@@ -510,8 +560,10 @@ void ui_update(const SysData *d) {
     // Per-core bars
     for (int i = 0; i < 16; i++) {
         lv_bar_set_value(bars_core[i], d->cores[i], LV_ANIM_OFF);
-        lv_obj_set_style_bg_color(bars_core[i], pct_color(d->cores[i]),
-                                   LV_PART_INDICATOR);
+        lv_color_t cc = pct_color(d->cores[i]);
+        lv_obj_set_style_bg_color(bars_core[i], cc, LV_PART_INDICATOR);
+        lv_obj_set_style_text_color(lbls_core[i],
+            d->cores[i] > 5 ? cc : lv_color_hex(0x666666), 0);
     }
 }
 

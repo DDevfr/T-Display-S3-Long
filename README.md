@@ -39,9 +39,9 @@ Les métriques sont envoyées du NUC vers l'ESP32 via USB-Serial (CSV) par le sc
 | [════════]                           |
 ├──────────────────────────────────────┤
 │ SSD1  38°C               123/1832 GB │  ← Titre SSD1 : temp. centrée, capa. droite
-│ R - W [════════]  16 KB/s            │  ← R et W en vert si actifs (> 512 KB/s)
+│ R - W [════════]             16 KB/s │  ← R et W en vert si actifs (> 512 KB/s)
 ├ ─ ─ ─ ─ ─ ─ ─ ─  ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ┤
-│ SSD2  --°C               480/1863 GB │  ← SSD2 (USB Crucial — temp n/a, pas de gauge)
+│ SSD2  --°C               111/1863 GB │  ← SSD2 (USB Crucial — temp n/a, pas de gauge)
 └──────────────────────────────────────┘
 ```
 

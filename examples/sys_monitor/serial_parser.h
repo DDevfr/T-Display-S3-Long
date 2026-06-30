@@ -24,6 +24,10 @@ struct SysData {
     char  wifi_ssid[9];
     float wifi_sig;
     float vpn_on;
+    float    net_total_kbps;
+    float    cpu_freq_ghz;
+    uint8_t  cpu_power_w;
+    uint32_t uptime_s;
     bool valid;
 };
 
@@ -37,6 +41,10 @@ inline bool parse_sysdata(const char *line, SysData *out) {
     out->ssd2_temp = 0.0f;
     out->ssd2_used_gb = 0.0f;
     out->ssd2_total_gb = 0.0f;
+    out->net_total_kbps = 0.0f;
+    out->cpu_freq_ghz = 0.0f;
+    out->cpu_power_w  = 0;
+    out->uptime_s     = 0;
     char buf[512];
     strncpy(buf, line, sizeof(buf) - 1);
     buf[sizeof(buf) - 1] = '\0';
@@ -72,7 +80,11 @@ inline bool parse_sysdata(const char *line, SysData *out) {
             out->wifi_ssid[8] = '\0';
         }
         else if (strcmp(key, "WSIG") == 0) out->wifi_sig = val;
-        else if (strcmp(key, "VPN")  == 0) out->vpn_on   = val;
+        else if (strcmp(key, "VPN")  == 0) out->vpn_on       = val;
+        else if (strcmp(key, "NTOT") == 0) out->net_total_kbps = val;
+        else if (strcmp(key, "CFRQ") == 0) out->cpu_freq_ghz = val / 10.0f;
+        else if (strcmp(key, "CPWR") == 0) out->cpu_power_w  = (uint8_t)val;
+        else if (strcmp(key, "UPTS") == 0) out->uptime_s     = (uint32_t)val;
         else if (key[0] == 'C' && key[1] == 'X') {
             char *p = (char*)(colon + 1);
             for (int i = 0; i < 16; i++) {

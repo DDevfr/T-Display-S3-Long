@@ -59,6 +59,25 @@ _SSD_DEVICES    = []   # ['nvme0n1', 'sda'] — jusqu'à 2 devices
 _SSD_TEMP_PATHS = []   # [path|None, ...]
 _SSD_MOUNTS     = []   # ['/', '/media/...']
 
+_NET_IFACE      = ''        # interface WiFi active (ex: 'wlp2s0')
+_net_prev_bytes = (0, 0)    # (bytes_sent, bytes_recv) snapshot précédent
+_net_prev_time  = None
+_net_ema        = 0         # EMA du débit total en KB/s
+_rapl_prev      = (0, 0.0)  # (energy_uj, monotonic_time)
+_RAPL_PATH      = '/sys/class/powercap/intel-rapl:0/energy_uj'
+
+def _detect_net_iface() -> None:
+    """Détecte l'interface WiFi active ('wlp2s0', etc.)."""
+    global _NET_IFACE
+    try:
+        for name, stats in sorted(psutil.net_if_stats().items()):
+            if name.startswith('wl') and stats.isup:
+                _NET_IFACE = name
+                return
+    except Exception:
+        pass
+
+
 def _detect_ssd_devices() -> None:
     """Détecte les disques physiques (NVMe en premier, puis USB/SATA)."""
     global _SSD_DEVICES, _SSD_TEMP_PATHS, _SSD_MOUNTS
@@ -251,6 +270,59 @@ def get_gpu_usage() -> float:
     return 0.0
 
 
+def get_net_avg_kbps() -> int:
+    """Débit total WiFi lissé par EMA α=0.25 (upload + download, KB/s)."""
+    global _net_prev_bytes, _net_prev_time, _net_ema
+    if not _NET_IFACE:
+        return 0
+    try:
+        now   = time.monotonic()
+        stats = psutil.net_io_counters(pernic=True).get(_NET_IFACE)
+        if not stats or _net_prev_time is None:
+            _net_prev_bytes = (stats.bytes_sent, stats.bytes_recv) if stats else (0, 0)
+            _net_prev_time  = now
+            return 0
+        dt    = now - _net_prev_time
+        total = int(((stats.bytes_sent - _net_prev_bytes[0])
+                   + (stats.bytes_recv - _net_prev_bytes[1])) / dt / 1024) if dt > 0 else 0
+        _net_prev_bytes = (stats.bytes_sent, stats.bytes_recv)
+        _net_prev_time  = now
+        _net_ema = int(0.25 * max(0, total) + 0.75 * _net_ema)
+        return _net_ema
+    except Exception:
+        return 0
+
+
+def get_cpu_freq_x10() -> int:
+    """Fréquence CPU moyenne × 10 (ex: 32 = 3.2 GHz)."""
+    try:
+        f = psutil.cpu_freq()
+        return int(f.current / 100) if f else 0
+    except Exception:
+        return 0
+
+
+def get_cpu_power_w() -> int:
+    """Puissance CPU via RAPL (W). Retourne 0 si non accessible (permission root)."""
+    global _rapl_prev
+    try:
+        e = int(open(_RAPL_PATH).read())
+        now = time.monotonic()
+        prev_e, prev_t = _rapl_prev
+        _rapl_prev = (e, now)
+        dt = now - prev_t
+        if prev_e and dt > 0:
+            return max(0, int((e - prev_e) / dt / 1e6))
+    except Exception:
+        pass
+    return 0
+
+
+def get_uptime_s() -> int:
+    """Uptime système en secondes."""
+    return int(time.time() - psutil.boot_time())
+
+
 def collect() -> dict:
     vm      = psutil.virtual_memory()
     cores   = psutil.cpu_percent(percpu=True)
@@ -260,6 +332,7 @@ def collect() -> dict:
     caps    = get_ssd_capacities()
     vram_used, vram_total = get_vram()
     wifi_ssid, wifi_sig  = get_wifi()
+    net_total            = get_net_avg_kbps()
 
     def _io(i, j):  return io[i][j]   if i < len(io)    else 0.0
     def _tmp(i):    return temps[i]    if i < len(temps)  else 0.0
@@ -288,6 +361,10 @@ def collect() -> dict:
         "wifi_ssid":  wifi_ssid,
         "wifi_sig":   wifi_sig,
         "vpn_on":     int(get_vpn_status()),
+        "net_total":  net_total,
+        "cpu_freq":   get_cpu_freq_x10(),
+        "cpu_power":  get_cpu_power_w(),
+        "uptime":     get_uptime_s(),
     }
 
 
@@ -312,6 +389,12 @@ def format_line(d: dict) -> str:
         f"WNAM:{d['wifi_ssid']}",
         f"WSIG:{d['wifi_sig']}",
         f"VPN:{d['vpn_on']}",
+    ]
+    parts += [
+        f"NTOT:{d['net_total']}",
+        f"CFRQ:{d['cpu_freq']}",
+        f"CPWR:{d['cpu_power']}",
+        f"UPTS:{d['uptime']}",
     ]
     parts.append("CX:" + ";".join(str(v) for v in d["cores"]))
     return ",".join(parts)
@@ -559,6 +642,7 @@ def main() -> None:
 
     print("=== NUC Monitor — vérification démarrage ===")
     _detect_ssd_devices()
+    _detect_net_iface()
     preflight_check(port)
 
     try:
