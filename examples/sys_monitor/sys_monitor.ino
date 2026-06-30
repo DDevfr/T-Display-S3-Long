@@ -99,6 +99,7 @@ static bool signal_lost = false;
 
 // ── Setup ─────────────────────────────────────────────────────────────────────
 void setup() {
+    Serial.setRxBufferSize(512);
     Serial.begin(115200);   // HWCDC (USB-JTAG) — requis pour serial_read_line()
 
     pinMode(TOUCH_INT, INPUT_PULLUP);

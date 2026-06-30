@@ -22,8 +22,8 @@ Les métriques sont envoyées du NUC vers l'ESP32 via USB-Serial (CSV) par le sc
 
 ```
 ┌──────────────────────────────────────┐
-│ Olympe |||..                  VPN ON │  ← Header : WiFi (SSID + barres)
-│ 56%                                  │  ← % signal WiFi (font_12, coloré)
+│ Olympe |||..                  VPN ON │  ← Header : WiFi (SSID + barres, font_12)
+│ 56%                                  │  ← % signal WiFi (font_14, coloré)
 ├──────────────────────────────────────┤
 │         Arc CPU  %  °C               │  ← CPU % (font_20) + °C, couleur dynamique
 │            CPU                       │  ← Label + "Ryzen 9 7940HS" dessous
@@ -33,14 +33,15 @@ Les métriques sont envoyées du NUC vers l'ESP32 via USB-Serial (CSV) par le sc
 │         Arc GPU  %  °C               │  ← GPU % + °C (Radeon 780M)
 │            GPU                       │  ← Label + "Radeon 780M" dessous
 ├──────────────────────────────────────┤
-│ RAM          14.3/62 GB              │  ← Label gauche, valeur droite, barre dessous
+│ RAM          14/62 GB                │  ← Label gauche, valeur droite, barre dessous
 | [════════]                           |
-│ VRAM          1.5/8 GB               │  ← Idem, VRAM iGPU
+│ VRAM          1/8 GB                 │  ← Idem, VRAM iGPU
 | [════════]                           |
 ├──────────────────────────────────────┤
-│ SSD   38°C               123/1832 GB │  ← Titre SSD : temp. centrée, capa. droite
-│ R [════════]  12 MB/s                │
-│ W [════════]   4 MB/s                │
+│ SSD1  38°C               123/1832 GB │  ← Titre SSD1 : temp. centrée, capa. droite
+│ R - W [════════]  16 KB/s            │  ← R et W en vert si actifs (> 512 KB/s)
+├ ─ ─ ─ ─ ─ ─ ─ ─  ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ┤
+│ SSD2  --°C               480/1863 GB │  ← SSD2 (USB Crucial — temp n/a, pas de gauge)
 └──────────────────────────────────────┘
 ```
 
@@ -76,28 +77,33 @@ lib/
 ## Métriques envoyées (protocole CSV)
 
 ```
-CPU:45.2,CTEMP:71.0,GPU:12.5,GTEMP:55.0,RAM:68.4,RTOT:62.0,
-SREAD:12.3,SWRIT:4.1,STEMP:38.0,SCAP:123,STOT:1832,
+CPU:65,CTEMP:78,GPU:23,GTEMP:62,RAM:68,RTOT:62,
+SREAD:51200,SWRIT:20480,STEMP:38,SCAP:123,STOT:1832,
+S2TMP:0,S2CAP:480,S2TOT:1863,
 VUSED:1489,VTOT:8192,WNAM:Olympe,WSIG:56,VPN:1,
-C0:55,C1:12,...,C15:8
+CX:55;12;8;6;4;3;2;1;78;45;12;8;5;3;2;1
 ```
 
 | Clé | Valeur |
 |-----|--------|
-| `CPU` | % utilisation CPU global |
-| `CTEMP` | Température CPU °C (k10temp/Tctl) |
-| `GPU` | % utilisation GPU (gpu_busy_percent sysfs) |
-| `GTEMP` | Température GPU °C (amdgpu/edge) |
-| `RAM` | % RAM utilisée |
-| `RTOT` | RAM totale en GB |
-| `SREAD` / `SWRIT` | Débit SSD lecture/écriture en MB/s |
-| `STEMP` | Température NVMe °C (sysfs nvme hwmon) |
-| `SCAP` / `STOT` | Espace utilisé / total SSD en GB (/) |
+| `CPU` | % utilisation CPU global (entier) |
+| `CTEMP` | Température CPU °C (k10temp/Tctl, entier) |
+| `GPU` | % utilisation GPU (gpu_busy_percent sysfs, entier) |
+| `GTEMP` | Température GPU °C (amdgpu/edge, entier) |
+| `RAM` | % RAM utilisée (entier) |
+| `RTOT` | RAM totale en GB (entier) |
+| `SREAD` / `SWRIT` | Débit SSD1 (NVMe) lecture/écriture en **KB/s** (entier, précision sub-MB/s) |
+| `STEMP` | Température SSD1 °C (sysfs nvme hwmon, entier) |
+| `SCAP` / `STOT` | Espace utilisé / total SSD1 en GB |
+| `S2TMP` | Température SSD2 °C (0 si USB sans hwmon) |
+| `S2CAP` / `S2TOT` | Espace utilisé / total SSD2 en GB |
 | `VUSED` / `VTOT` | VRAM utilisée / totale en MB (sysfs amdgpu) |
 | `WNAM` | SSID WiFi (max 8 chars, sanitisé) |
 | `WSIG` | Qualité signal WiFi % (nmcli) |
 | `VPN` | VPN actif : 1 / inactif : 0 (interface tun/wg détectée) |
-| `C0`…`C15` | % par cœur (16 threads) |
+| `CX` | 16 valeurs % par cœur séparées par `;` (ex: `CX:55;12;8;...;1`) |
+
+> **Note SSD2** : le pont USB-SATA ASMedia ASM235C (driver `uas`) ne remonte pas les lectures dans `/proc/diskstats`. La gauge de débit est donc absente pour SSD2 — seules la capacité et la température (toujours `--°C` côté USB) sont affichées.
 
 ---
 
@@ -188,13 +194,17 @@ sudo journalctl -u nuc-monitor -f      # logs en direct
 ## Points techniques notables
 
 - **HWCDC vs HardwareSerial** : l'ESP32-S3 expose `Serial` en HWCDC quand `ARDUINO_USB_CDC_ON_BOOT=1`. Sans ce flag, `Serial.available()` reste toujours à 0.
+- **Buffer série HWCDC** : le buffer RX logiciel est étendu à 512 octets via `Serial.setRxBufferSize(512)` (défaut = 256). Les buffers de `serial_parser.h` sont également à 512 octets. Le script Python tronque les lignes dépassant 510 octets avant envoi. En cas de ligne trop longue côté firmware, `serial_read_line()` rejette la ligne entière (flag `overflow`) plutôt que de parser des données tronquées.
 - **Double-open série** : l'ouverture de `/dev/ttyACM0` sous Linux déclenche un reset USB-JTAG. Le script ouvre deux fois le port (drain + close entre les deux) pour obtenir une session cdc-acm propre.
+- **Protocole compact** : les 16 cœurs CPU sont encodés dans un seul champ `CX:v;v;...;v` (séparateur `;`) au lieu de 16 champs `C0`…`C15`. Les débits SSD sont en KB/s entier (pas en MB/s décimal) pour une meilleure précision sub-MB/s. Taille typique d'un message : ~234 octets.
 - **LVGL %f** : `lv_snprintf` (LVGL 8.3) ne supporte pas `%f`. Toutes les valeurs float sont converties en entiers avant formatage (`(int)(val + 0.5f)`).
 - **VRAM source** : `/sys/class/drm/card1/device/mem_info_vram_used` et `mem_info_vram_total` (driver amdgpu, pas besoin de ROCm).
 - **Temp NVMe** : `/sys/class/nvme/nvme0/hwmon*/temp1_input` (millidegrés → divisé par 1000).
 - **VPN detection** : `psutil.net_if_stats()` — toute interface contenant `tun`, `tap`, `vpn` ou `wg` et marquée UP est considérée VPN actif (couvre `qtun`, `tun0`, `wg0`, etc.).
 - **Rétroéclairage PWM** : backlight sur `TFT_BL` (GPIO 1) via LEDC, canal 0, 5 kHz, 8-bit. `BL_BRIGHTNESS = 153` ≈ 60 % dans `sys_monitor.ino` — modifier cette valeur pour ajuster la luminosité (0–255).
-- **Échelle barres SSD** : 500 MB/s = 100 % (diviseur `5.0f` dans `ui.cpp`). La valeur numérique affichée reste en MB/s réels ; le cap à 100 % gère les débits supérieurs.
+- **Gauge SSD1** : barre unique affichant `R+W` cumulés en KB/s. Échelle : 20 000 KB/s (≈ 20 MB/s) = 100 %. Affichage dynamique : `KB/s` sous 10 240 KB/s, `MB/s` au-dessus. Les indicateurs R et W s'allument en vert au-dessus de 512 KB/s.
+- **SSD2 sans gauge** : le pont USB-SATA ASMedia ASM235C (driver `uas`, `/dev/sdc`) ne met pas à jour `/proc/diskstats` pour les lectures — seules les écritures fsync'd sont comptabilisées avec délai. La gauge est donc supprimée ; seules la capacité et la température sont affichées.
+- **Détection SSD** : `_detect_ssd_devices()` filtre les périphériques avec `taille ≥ 1 GB` pour exclure les gadgets USB 0-octet (sda/sdb exposés par l'ESP32 en mass-storage). Le NVMe est toujours sélectionné en premier.
 - **Intervalle polling Python** : 0.25 s par défaut dans `monitor_sender.py`. Configurable via `--interval`.
 
 ---

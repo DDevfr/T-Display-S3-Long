@@ -7,6 +7,7 @@
 #define CLR_RAM       lv_color_hex(0x00C87A)   // vert
 #define CLR_TEXT      lv_color_hex(0xE0E0E0)
 #define CLR_DIM       lv_color_hex(0x2A2A2A)
+#define CLR_GRAY      lv_color_hex(0x888888)   // gris R/W inactif
 #define CLR_WARN      lv_color_hex(0xFF8C00)   // orange
 #define CLR_HOT       lv_color_hex(0xFF2222)   // rouge charge élevée
 
@@ -16,7 +17,7 @@
 
 // Zones Y
 #define Y_HEADER     0
-#define Y_CPU       30
+#define Y_CPU       42
 #define Y_CORES    170
 #define Y_GPU      375
 #define Y_RAM      496
@@ -36,12 +37,9 @@ static lv_obj_t *lbl_ram;
 static lv_obj_t *bar_vram;
 static lv_obj_t *lbl_vram;
 
-static lv_obj_t *bar_ssd_read;
-static lv_obj_t *bar_ssd_write;
-static lv_obj_t *lbl_ssd_read;
-static lv_obj_t *lbl_ssd_write;
-static lv_obj_t *lbl_ssd_temp;
-static lv_obj_t *lbl_ssd_cap;
+static lv_obj_t *lbl_ssd_temp,  *lbl_ssd_cap;
+static lv_obj_t *lbl_ssd_r,  *lbl_ssd_w,  *bar_ssd,  *lbl_ssd_spd;
+static lv_obj_t *lbl_ssd2_temp, *lbl_ssd2_cap;
 
 static lv_obj_t *bars_core[16];
 
@@ -113,33 +111,33 @@ void ui_init(void) {
 
     // ── Header ───────────────────────────────────────────────────────────────
     lv_obj_t *hdr = lv_obj_create(scr);
-    lv_obj_set_size(hdr, SCR_W, 30);
+    lv_obj_set_size(hdr, SCR_W, 42);
     lv_obj_set_pos(hdr, 0, Y_HEADER);
     lv_obj_set_style_bg_color(hdr, lv_color_hex(0x1A0000), 0);
     lv_obj_set_style_border_width(hdr, 0, 0);
     lv_obj_set_style_radius(hdr, 0, 0);
     lv_obj_set_style_pad_all(hdr, 0, 0);
 
-    // Ligne 1 : SSID + barres (gauche, font_8)
+    // Ligne 1 : SSID + barres (gauche, font_12)
     lbl_wifi = lv_label_create(hdr);
     lv_label_set_text(lbl_wifi, "WiFi --");
     lv_obj_set_style_text_color(lbl_wifi, CLR_TEXT, 0);
-    lv_obj_set_style_text_font(lbl_wifi, &lv_font_montserrat_8, 0);
+    lv_obj_set_style_text_font(lbl_wifi, &lv_font_montserrat_12, 0);
     lv_obj_set_pos(lbl_wifi, 4, 2);
 
-    // Ligne 1 : VPN (droite, font_8)
+    // Ligne 1 : VPN (droite, font_12)
     lbl_vpn = lv_label_create(hdr);
     lv_label_set_text(lbl_vpn, "VPN --");
     lv_obj_set_style_text_color(lbl_vpn, lv_color_hex(0x555555), 0);
-    lv_obj_set_style_text_font(lbl_vpn, &lv_font_montserrat_8, 0);
+    lv_obj_set_style_text_font(lbl_vpn, &lv_font_montserrat_12, 0);
     lv_obj_align(lbl_vpn, LV_ALIGN_TOP_RIGHT, -4, 2);
 
-    // Ligne 2 : % WiFi (gauche, font_12, coloré)
+    // Ligne 2 : % WiFi (gauche, font_14, coloré)
     lbl_wifi_pct = lv_label_create(hdr);
     lv_label_set_text(lbl_wifi_pct, "--%");
     lv_obj_set_style_text_color(lbl_wifi_pct, CLR_TEXT, 0);
-    lv_obj_set_style_text_font(lbl_wifi_pct, &lv_font_montserrat_12, 0);
-    lv_obj_set_pos(lbl_wifi_pct, 4, 14);
+    lv_obj_set_style_text_font(lbl_wifi_pct, &lv_font_montserrat_14, 0);
+    lv_obj_set_pos(lbl_wifi_pct, 4, 22);
 
     // ── CPU section ──────────────────────────────────────────────────────────
     // Arc (170px zone → arc 120px centré)
@@ -179,7 +177,7 @@ void ui_init(void) {
     // Séparateur
     lv_obj_t *sep1 = lv_obj_create(scr);
     lv_obj_set_size(sep1, SCR_W - 20, 1);
-    lv_obj_set_pos(sep1, 10, Y_CORES - 4);
+    lv_obj_set_pos(sep1, 10, Y_CPU + 133);
     lv_obj_set_style_bg_color(sep1, CLR_DIM, 0);
     lv_obj_set_style_border_width(sep1, 0, 0);
     lv_obj_set_style_radius(sep1, 0, 0);
@@ -287,7 +285,7 @@ void ui_init(void) {
     lv_obj_set_style_radius(sep3, 0, 0);
 
     // ── RAM section ──────────────────────────────────────────────────────────
-    make_label(scr, "RAM", lv_color_hex(0x888888),
+    make_label(scr, "RAM", CLR_TEXT,
                &lv_font_montserrat_10, 8, Y_RAM + 0);
     lbl_ram = lv_label_create(scr);
     lv_label_set_text(lbl_ram, "--/-- GB");
@@ -309,7 +307,7 @@ void ui_init(void) {
     lv_obj_set_style_border_width(bar_ram, 0, LV_PART_MAIN);
 
     // ── VRAM section ─────────────────────────────────────────────────────────
-    make_label(scr, "VRAM", lv_color_hex(0x888888),
+    make_label(scr, "VRAM", CLR_TEXT,
                &lv_font_montserrat_10, 8, Y_RAM + 30);
     lbl_vram = lv_label_create(scr);
     lv_label_set_text(lbl_vram, "--/-- GB");
@@ -331,6 +329,7 @@ void ui_init(void) {
     lv_obj_set_style_border_width(bar_vram, 0, LV_PART_MAIN);
 
     // ── SSD section ──────────────────────────────────────────────────────────
+    // SSD1
     lv_obj_t *sep_ssd = lv_obj_create(scr);
     lv_obj_set_size(sep_ssd, SCR_W - 20, 1);
     lv_obj_set_pos(sep_ssd, 10, Y_RAM + 61);
@@ -338,10 +337,7 @@ void ui_init(void) {
     lv_obj_set_style_border_width(sep_ssd, 0, 0);
     lv_obj_set_style_radius(sep_ssd, 0, 0);
 
-    make_label(scr, "SSD", lv_color_hex(0x888888),
-               &lv_font_montserrat_10, 8, Y_RAM + 65);
-
-    // Température SSD au centre de la ligne titre
+    make_label(scr, "SSD1", CLR_TEXT, &lv_font_montserrat_10, 8, Y_RAM + 65);
     lbl_ssd_temp = lv_label_create(scr);
     lv_label_set_text(lbl_ssd_temp, "--\xc2\xb0""C");
     lv_obj_set_style_text_color(lbl_ssd_temp, CLR_TEXT, 0);
@@ -349,8 +345,6 @@ void ui_init(void) {
     lv_obj_set_width(lbl_ssd_temp, SCR_W - 16);
     lv_obj_set_style_text_align(lbl_ssd_temp, LV_TEXT_ALIGN_CENTER, 0);
     lv_obj_set_pos(lbl_ssd_temp, 8, Y_RAM + 65);
-
-    // Capacité SSD à droite
     lbl_ssd_cap = lv_label_create(scr);
     lv_label_set_text(lbl_ssd_cap, "--/-- GB");
     lv_obj_set_style_text_color(lbl_ssd_cap, CLR_TEXT, 0);
@@ -359,35 +353,51 @@ void ui_init(void) {
     lv_obj_set_style_text_align(lbl_ssd_cap, LV_TEXT_ALIGN_RIGHT, 0);
     lv_obj_set_pos(lbl_ssd_cap, 8, Y_RAM + 65);
 
-    make_label(scr, "R", lv_color_hex(0x888888),
-               &lv_font_montserrat_10, 8, Y_RAM + 80);
-    bar_ssd_read = lv_bar_create(scr);
-    lv_bar_set_range(bar_ssd_read, 0, 100);
-    lv_bar_set_value(bar_ssd_read, 0, LV_ANIM_OFF);
-    lv_obj_set_size(bar_ssd_read, 96, 22);
-    lv_obj_set_pos(bar_ssd_read, 22, Y_RAM + 78);
-    lv_obj_set_style_bg_color(bar_ssd_read, CLR_DIM, LV_PART_MAIN);
-    lv_obj_set_style_bg_color(bar_ssd_read, CLR_RAM, LV_PART_INDICATOR);
-    lv_obj_set_style_radius(bar_ssd_read, 4, LV_PART_MAIN);
-    lv_obj_set_style_radius(bar_ssd_read, 4, LV_PART_INDICATOR);
-    lv_obj_set_style_border_width(bar_ssd_read, 0, LV_PART_MAIN);
-    lbl_ssd_read = make_label(scr, "-- MB/s", CLR_TEXT,
-                              &lv_font_montserrat_10, 122, Y_RAM + 80);
+    lbl_ssd_r = make_label(scr, "R", CLR_GRAY, &lv_font_montserrat_10,  8, Y_RAM + 81);
+    make_label(scr, "-", lv_color_hex(0x555555), &lv_font_montserrat_10, 14, Y_RAM + 81);
+    lbl_ssd_w = make_label(scr, "W", CLR_GRAY, &lv_font_montserrat_10, 20, Y_RAM + 81);
+    bar_ssd = lv_bar_create(scr);
+    lv_bar_set_range(bar_ssd, 0, 100);
+    lv_bar_set_value(bar_ssd, 0, LV_ANIM_OFF);
+    lv_obj_set_size(bar_ssd, 90, 16);
+    lv_obj_set_pos(bar_ssd, 30, Y_RAM + 79);
+    lv_obj_set_style_bg_color(bar_ssd, CLR_DIM, LV_PART_MAIN);
+    lv_obj_set_style_bg_color(bar_ssd, CLR_RAM, LV_PART_INDICATOR);
+    lv_obj_set_style_radius(bar_ssd, 4, LV_PART_MAIN);
+    lv_obj_set_style_radius(bar_ssd, 4, LV_PART_INDICATOR);
+    lv_obj_set_style_border_width(bar_ssd, 0, LV_PART_MAIN);
+    lbl_ssd_spd = lv_label_create(scr);
+    lv_label_set_text(lbl_ssd_spd, "-- MB/s ");
+    lv_obj_set_style_text_color(lbl_ssd_spd, CLR_TEXT, 0);
+    lv_obj_set_style_text_font(lbl_ssd_spd, &lv_font_montserrat_10, 0);
+    lv_obj_set_width(lbl_ssd_spd, SCR_W - 124);
+    lv_obj_set_style_text_align(lbl_ssd_spd, LV_TEXT_ALIGN_RIGHT, 0);
+    lv_obj_set_pos(lbl_ssd_spd, 122, Y_RAM + 81);
 
-    make_label(scr, "W", lv_color_hex(0x888888),
-               &lv_font_montserrat_10, 8, Y_RAM + 108);
-    bar_ssd_write = lv_bar_create(scr);
-    lv_bar_set_range(bar_ssd_write, 0, 100);
-    lv_bar_set_value(bar_ssd_write, 0, LV_ANIM_OFF);
-    lv_obj_set_size(bar_ssd_write, 96, 22);
-    lv_obj_set_pos(bar_ssd_write, 22, Y_RAM + 106);
-    lv_obj_set_style_bg_color(bar_ssd_write, CLR_DIM, LV_PART_MAIN);
-    lv_obj_set_style_bg_color(bar_ssd_write, CLR_RAM, LV_PART_INDICATOR);
-    lv_obj_set_style_radius(bar_ssd_write, 4, LV_PART_MAIN);
-    lv_obj_set_style_radius(bar_ssd_write, 4, LV_PART_INDICATOR);
-    lv_obj_set_style_border_width(bar_ssd_write, 0, LV_PART_MAIN);
-    lbl_ssd_write = make_label(scr, "-- MB/s", CLR_TEXT,
-                               &lv_font_montserrat_10, 122, Y_RAM + 108);
+    // SSD2
+    lv_obj_t *sep_ssd2 = lv_obj_create(scr);
+    lv_obj_set_size(sep_ssd2, SCR_W - 20, 1);
+    lv_obj_set_pos(sep_ssd2, 10, Y_RAM + 97);
+    lv_obj_set_style_bg_color(sep_ssd2, CLR_DIM, 0);
+    lv_obj_set_style_border_width(sep_ssd2, 0, 0);
+    lv_obj_set_style_radius(sep_ssd2, 0, 0);
+
+    make_label(scr, "SSD2", CLR_TEXT, &lv_font_montserrat_10, 8, Y_RAM + 101);
+    lbl_ssd2_temp = lv_label_create(scr);
+    lv_label_set_text(lbl_ssd2_temp, "--\xc2\xb0""C");
+    lv_obj_set_style_text_color(lbl_ssd2_temp, CLR_TEXT, 0);
+    lv_obj_set_style_text_font(lbl_ssd2_temp, &lv_font_montserrat_10, 0);
+    lv_obj_set_width(lbl_ssd2_temp, SCR_W - 16);
+    lv_obj_set_style_text_align(lbl_ssd2_temp, LV_TEXT_ALIGN_CENTER, 0);
+    lv_obj_set_pos(lbl_ssd2_temp, 8, Y_RAM + 101);
+    lbl_ssd2_cap = lv_label_create(scr);
+    lv_label_set_text(lbl_ssd2_cap, "--/-- GB");
+    lv_obj_set_style_text_color(lbl_ssd2_cap, CLR_TEXT, 0);
+    lv_obj_set_style_text_font(lbl_ssd2_cap, &lv_font_montserrat_10, 0);
+    lv_obj_set_width(lbl_ssd2_cap, SCR_W - 16);
+    lv_obj_set_style_text_align(lbl_ssd2_cap, LV_TEXT_ALIGN_RIGHT, 0);
+    lv_obj_set_pos(lbl_ssd2_cap, 8, Y_RAM + 101);
+
 
     // ── No-signal overlay ────────────────────────────────────────────────────
     lbl_nosignal = lv_label_create(scr);
@@ -458,25 +468,44 @@ void ui_update(const SysData *d) {
     lv_label_set_text_fmt(lbl_vram, "%d.%d/%d GB",
                           vi, vf, (int)(d->vram_total_mb / 1024.0f + 0.5f));
 
-    // SSD ligne titre
-    lv_label_set_text_fmt(lbl_ssd_temp, "%d\xc2\xb0""C", (int)(d->ssd_temp + 0.5f));
-    lv_obj_set_style_text_color(lbl_ssd_temp, temp_color(d->ssd_temp), 0);
-    lv_label_set_text_fmt(lbl_ssd_cap, "%d/%d GB",
-                          (int)d->ssd_used_gb, (int)d->ssd_total_gb);
+    // SSD — protocole en KB/s, échelle 20 000 KB/s (≈20 MB/s) = 100 %
+    #define SSD_ACT   512.0f    // 0.5 MB/s en KB/s
+    #define SSD_SCALE 200.0f    // 20 000 KB/s = 100 %
 
-    // SSD (cap à 500 MB/s = 100%)
-    int read_pct  = (int)(d->ssd_read_mbps  / 5.0f + 0.5f);
-    int write_pct = (int)(d->ssd_write_mbps / 5.0f + 0.5f);
-    if (read_pct  > 100) read_pct  = 100;
-    if (write_pct > 100) write_pct = 100;
+    // SSD1
+    float spd1 = d->ssd_read_mbps + d->ssd_write_mbps;   // KB/s
+    int   pct1 = (int)(spd1 / SSD_SCALE + 0.5f); if (pct1 > 100) pct1 = 100;
+    lv_obj_set_style_text_color(lbl_ssd_r, d->ssd_read_mbps  > SSD_ACT ? CLR_RAM : CLR_GRAY, 0);
+    lv_obj_set_style_text_color(lbl_ssd_w, d->ssd_write_mbps > SSD_ACT ? CLR_RAM : CLR_GRAY, 0);
+    lv_bar_set_value(bar_ssd, pct1, LV_ANIM_OFF);
+    lv_obj_set_style_bg_color(bar_ssd, pct_color(pct1), LV_PART_INDICATOR);
+    { int s1 = (int)(spd1 + 0.5f);
+      if (s1 >= 10240) lv_label_set_text_fmt(lbl_ssd_spd, "%d MB/s ", s1 / 1024);
+      else             lv_label_set_text_fmt(lbl_ssd_spd, "%d KB/s ", s1); }
+    if (d->ssd_temp > 0.0f) {
+        lv_label_set_text_fmt(lbl_ssd_temp, "%d\xc2\xb0""C", (int)(d->ssd_temp + 0.5f));
+        lv_obj_set_style_text_color(lbl_ssd_temp, temp_color(d->ssd_temp), 0);
+    } else {
+        lv_label_set_text(lbl_ssd_temp, "--\xc2\xb0""C");
+        lv_obj_set_style_text_color(lbl_ssd_temp, CLR_DIM, 0);
+    }
+    if (d->ssd_total_gb > 0.0f)
+        lv_label_set_text_fmt(lbl_ssd_cap, "%d/%d GB", (int)d->ssd_used_gb, (int)d->ssd_total_gb);
+    else
+        lv_label_set_text(lbl_ssd_cap, "--/-- GB");
 
-    lv_bar_set_value(bar_ssd_read, read_pct, LV_ANIM_OFF);
-    lv_obj_set_style_bg_color(bar_ssd_read, pct_color(read_pct), LV_PART_INDICATOR);
-    lv_label_set_text_fmt(lbl_ssd_read, "%d MB/s", (int)(d->ssd_read_mbps + 0.5f));
-
-    lv_bar_set_value(bar_ssd_write, write_pct, LV_ANIM_OFF);
-    lv_obj_set_style_bg_color(bar_ssd_write, pct_color(write_pct), LV_PART_INDICATOR);
-    lv_label_set_text_fmt(lbl_ssd_write, "%d MB/s", (int)(d->ssd_write_mbps + 0.5f));
+    // SSD2
+    if (d->ssd2_temp > 0.0f) {
+        lv_label_set_text_fmt(lbl_ssd2_temp, "%d\xc2\xb0""C", (int)(d->ssd2_temp + 0.5f));
+        lv_obj_set_style_text_color(lbl_ssd2_temp, temp_color(d->ssd2_temp), 0);
+    } else {
+        lv_label_set_text(lbl_ssd2_temp, "--\xc2\xb0""C");
+        lv_obj_set_style_text_color(lbl_ssd2_temp, CLR_DIM, 0);
+    }
+    if (d->ssd2_total_gb > 0.0f)
+        lv_label_set_text_fmt(lbl_ssd2_cap, "%d/%d GB", (int)d->ssd2_used_gb, (int)d->ssd2_total_gb);
+    else
+        lv_label_set_text(lbl_ssd2_cap, "--/-- GB");
 
     // Per-core bars
     for (int i = 0; i < 16; i++) {

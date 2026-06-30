@@ -17,6 +17,7 @@ Usage :
 
 import argparse
 import glob
+import re
 import subprocess
 import time
 import sys
@@ -36,6 +37,10 @@ except ImportError:
     sys.exit("Installez pyserial :  pip install pyserial")
 
 
+# Limite matérielle HWCDC : buffer SW ESP32 = 512 octets (setRxBufferSize(512)),
+# buf[] serial_parser = 512 octets. On garde 2 octets de marge (\0 + sécurité).
+_SERIAL_MAX = 510
+
 # ── Chemins sysfs détectés au démarrage ───────────────────────────────────────
 
 def _find_sysfs(pattern: str) -> str | None:
@@ -46,10 +51,53 @@ _GPU_BUSY_PATH  = _find_sysfs("/sys/class/drm/card*/device/gpu_busy_percent")
 _GPU_TEMP_PATH  = _find_sysfs("/sys/class/drm/card*/device/hwmon/hwmon*/temp1_input")
 _VRAM_USED_PATH = _find_sysfs("/sys/class/drm/card*/device/mem_info_vram_used")
 _VRAM_TOTAL_PATH= _find_sysfs("/sys/class/drm/card*/device/mem_info_vram_total")
-_SSD_TEMP_PATH  = _find_sysfs("/sys/class/nvme/nvme*/hwmon*/temp1_input")
 
-_disk_prev      = None
+# ── Détection disques SSD (au démarrage) ─────────────────────────────────────
+_disk_prev      = {}   # {devname: SDiskIOCounters}
 _disk_prev_time = None
+_SSD_DEVICES    = []   # ['nvme0n1', 'sda'] — jusqu'à 2 devices
+_SSD_TEMP_PATHS = []   # [path|None, ...]
+_SSD_MOUNTS     = []   # ['/', '/media/...']
+
+def _detect_ssd_devices() -> None:
+    """Détecte les disques physiques (NVMe en premier, puis USB/SATA)."""
+    global _SSD_DEVICES, _SSD_TEMP_PATHS, _SSD_MOUNTS
+    _SSD_DEVICES = []; _SSD_TEMP_PATHS = []; _SSD_MOUNTS = []
+    try:
+        counters = psutil.disk_io_counters(perdisk=True) or {}
+    except Exception:
+        counters = {}
+    pat = re.compile(r'^(nvme\d+n\d+|[sh]d[a-z])$')
+
+    def _dev_size(dev):
+        try:
+            return int(open(f'/sys/class/block/{dev}/size').read()) * 512
+        except Exception:
+            return 0
+
+    devices = sorted(
+        [d for d in counters if pat.match(d) and _dev_size(d) >= 1024**3],
+        key=lambda n: (0 if n.startswith('nvme') else 1, n)
+    )[:2]
+    partitions = {p.device.replace('/dev/', ''): p.mountpoint
+                  for p in psutil.disk_partitions(all=False)}
+    for dev in devices:
+        mount = partitions.get(dev)
+        if mount is None:
+            for pdev, mnt in partitions.items():
+                if pdev.startswith(dev):
+                    mount = mnt; break
+        _SSD_MOUNTS.append(mount or '/')
+        temp_path = None
+        if dev.startswith('nvme'):
+            nvme_id = re.match(r'(nvme\d+)', dev).group(1)
+            cands = glob.glob(f"/sys/class/nvme/{nvme_id}/hwmon*/temp1_input")
+            temp_path = cands[0] if cands else None
+        else:
+            cands = glob.glob(f"/sys/class/block/{dev}/device/hwmon*/temp1_input")
+            temp_path = cands[0] if cands else None
+        _SSD_TEMP_PATHS.append(temp_path)
+    _SSD_DEVICES = devices
 
 
 # ── Lecture métriques ─────────────────────────────────────────────────────────
@@ -81,26 +129,32 @@ def get_gpu_temp() -> float:
     return 0.0
 
 
-def get_disk_io() -> tuple[float, float]:
-    """Débit lecture/écriture en MB/s depuis le dernier appel."""
+def get_disk_io_per_ssd() -> list[tuple[float, float]]:
+    """Retourne [(r0,w0), (r1,w1)] en MB/s pour chaque SSD détecté."""
     global _disk_prev, _disk_prev_time
+    fallback = [(0.0, 0.0)] * max(len(_SSD_DEVICES), 1)
     try:
-        counters = psutil.disk_io_counters()
+        all_ctrs = psutil.disk_io_counters(perdisk=True) or {}
         now = time.monotonic()
-        if _disk_prev is None or counters is None:
-            _disk_prev = counters
+        if not _disk_prev or _disk_prev_time is None:
+            _disk_prev = {d: all_ctrs[d] for d in _SSD_DEVICES if d in all_ctrs}
             _disk_prev_time = now
-            return 0.0, 0.0
+            return fallback
         dt = now - _disk_prev_time
-        if dt <= 0:
-            return 0.0, 0.0
-        read_mbps  = (counters.read_bytes  - _disk_prev.read_bytes)  / dt / 1024**2
-        write_mbps = (counters.write_bytes - _disk_prev.write_bytes) / dt / 1024**2
-        _disk_prev = counters
+        result = []
+        for dev in _SSD_DEVICES:
+            c, p = all_ctrs.get(dev), _disk_prev.get(dev)
+            if c and p and dt > 0:
+                r = max(0.0, (c.read_bytes  - p.read_bytes)  / dt / 1024**2)
+                w = max(0.0, (c.write_bytes - p.write_bytes) / dt / 1024**2)
+                result.append((round(r, 1), round(w, 1)))
+            else:
+                result.append((0.0, 0.0))
+        _disk_prev = {d: all_ctrs[d] for d in _SSD_DEVICES if d in all_ctrs}
         _disk_prev_time = now
-        return max(0.0, read_mbps), max(0.0, write_mbps)
+        return result if result else fallback
     except Exception:
-        return 0.0, 0.0
+        return fallback
 
 
 def get_wifi() -> tuple[str, int]:
@@ -134,31 +188,47 @@ def get_vpn_status() -> bool:
     return False
 
 
-def get_ssd_temp() -> float:
-    """Température composite NVMe depuis sysfs ou psutil."""
-    if _SSD_TEMP_PATH:
+def get_ssd_temps() -> list[float]:
+    """Température de chaque SSD (0.0 si indisponible)."""
+    temps = []
+    for i, dev in enumerate(_SSD_DEVICES):
+        path = _SSD_TEMP_PATHS[i] if i < len(_SSD_TEMP_PATHS) else None
+        if path:
+            try:
+                temps.append(round(int(open(path).read()) / 1000.0, 1))
+                continue
+            except Exception:
+                pass
+        if dev.startswith('nvme'):
+            try:
+                for name, entries in psutil.sensors_temperatures().items():
+                    if "nvme" in name.lower():
+                        for e in entries:
+                            if e.label in ("Composite", "Sensor 1", ""):
+                                temps.append(round(e.current, 1))
+                                break
+                        else:
+                            continue
+                        break
+                else:
+                    temps.append(0.0)
+            except Exception:
+                temps.append(0.0)
+        else:
+            temps.append(0.0)
+    return temps if temps else [0.0]
+
+
+def get_ssd_capacities() -> list[tuple[int, int]]:
+    """(used_gb, total_gb) pour chaque SSD."""
+    caps = []
+    for mount in _SSD_MOUNTS:
         try:
-            return round(int(open(_SSD_TEMP_PATH).read()) / 1000.0, 1)
+            u = psutil.disk_usage(mount)
+            caps.append((int(u.used / 1024**3), int(u.total / 1024**3)))
         except Exception:
-            pass
-    try:
-        for name, entries in psutil.sensors_temperatures().items():
-            if "nvme" in name.lower():
-                for e in entries:
-                    if e.label in ("Composite", "Sensor 1", ""):
-                        return round(e.current, 1)
-    except Exception:
-        pass
-    return 0.0
-
-
-def get_ssd_capacity() -> tuple[int, int]:
-    """Retourne (used_gb, total_gb) pour le filesystem racine."""
-    try:
-        u = psutil.disk_usage('/')
-        return int(u.used / 1024**3), int(u.total / 1024**3)
-    except Exception:
-        return 0, 0
+            caps.append((0, 0))
+    return caps if caps else [(0, 0)]
 
 
 def get_vram() -> tuple[float, float]:
@@ -185,10 +255,15 @@ def collect() -> dict:
     vm      = psutil.virtual_memory()
     cores   = psutil.cpu_percent(percpu=True)
     cores16 = (cores + [0.0] * 16)[:16]
-    ssd_r, ssd_w = get_disk_io()
+    io      = get_disk_io_per_ssd()
+    temps   = get_ssd_temps()
+    caps    = get_ssd_capacities()
     vram_used, vram_total = get_vram()
-    ssd_used, ssd_total  = get_ssd_capacity()
     wifi_ssid, wifi_sig  = get_wifi()
+
+    def _io(i, j):  return io[i][j]   if i < len(io)    else 0.0
+    def _tmp(i):    return temps[i]    if i < len(temps)  else 0.0
+    def _cap(i, j): return caps[i][j]  if i < len(caps)   else 0
 
     return {
         "cpu_pct":    round(psutil.cpu_percent(), 1),
@@ -198,11 +273,16 @@ def collect() -> dict:
         "ram_pct":    round(vm.percent, 1),
         "ram_gb":     round(vm.total / 1024**3, 1),
         "cores":      [int(c) for c in cores16],
-        "ssd_read":   round(ssd_r, 1),
-        "ssd_write":  round(ssd_w, 1),
-        "ssd_temp":   get_ssd_temp(),
-        "ssd_used":   ssd_used,
-        "ssd_total":  ssd_total,
+        "ssd_read":   _io(0, 0),
+        "ssd_write":  _io(0, 1),
+        "ssd_temp":   _tmp(0),
+        "ssd_used":   _cap(0, 0),
+        "ssd_total":  _cap(0, 1),
+        "ssd2_read":  _io(1, 0),
+        "ssd2_write": _io(1, 1),
+        "ssd2_temp":  _tmp(1),
+        "ssd2_used":  _cap(1, 0),
+        "ssd2_total": _cap(1, 1),
         "vram_used":  vram_used,
         "vram_total": vram_total,
         "wifi_ssid":  wifi_ssid,
@@ -213,24 +293,27 @@ def collect() -> dict:
 
 def format_line(d: dict) -> str:
     parts = [
-        f"CPU:{d['cpu_pct']:.1f}",
-        f"CTEMP:{d['cpu_temp']:.1f}",
-        f"GPU:{d['gpu_pct']:.1f}",
-        f"GTEMP:{d['gpu_temp']:.1f}",
-        f"RAM:{d['ram_pct']:.1f}",
-        f"RTOT:{d['ram_gb']:.1f}",
-        f"SREAD:{d['ssd_read']:.1f}",
-        f"SWRIT:{d['ssd_write']:.1f}",
-        f"STEMP:{d['ssd_temp']:.1f}",
+        f"CPU:{d['cpu_pct']:.0f}",
+        f"CTEMP:{d['cpu_temp']:.0f}",
+        f"GPU:{d['gpu_pct']:.0f}",
+        f"GTEMP:{d['gpu_temp']:.0f}",
+        f"RAM:{d['ram_pct']:.0f}",
+        f"RTOT:{d['ram_gb']:.0f}",
+        f"SREAD:{int(d['ssd_read']*1024)}",
+        f"SWRIT:{int(d['ssd_write']*1024)}",
+        f"STEMP:{d['ssd_temp']:.0f}",
         f"SCAP:{d['ssd_used']}",
         f"STOT:{d['ssd_total']}",
+        f"S2TMP:{d['ssd2_temp']:.0f}",
+        f"S2CAP:{d['ssd2_used']}",
+        f"S2TOT:{d['ssd2_total']}",
         f"VUSED:{d['vram_used']:.0f}",
         f"VTOT:{d['vram_total']:.0f}",
         f"WNAM:{d['wifi_ssid']}",
         f"WSIG:{d['wifi_sig']}",
         f"VPN:{d['vpn_on']}",
     ]
-    parts += [f"C{i}:{v}" for i, v in enumerate(d["cores"])]
+    parts.append("CX:" + ";".join(str(v) for v in d["cores"]))
     return ",".join(parts)
 
 
@@ -245,7 +328,8 @@ def print_dashboard(d: dict) -> None:
         f"CPU {d['cpu_pct']:5.1f}% {d['cpu_temp']:.0f}°C | "
         f"GPU {d['gpu_pct']:5.1f}% {d['gpu_temp']:.0f}°C | "
         f"RAM {d['ram_pct']:.1f}% | "
-        f"SSD R:{d['ssd_read']:6.1f} W:{d['ssd_write']:6.1f} MB/s | "
+        f"SSD1 R:{d['ssd_read']:5.1f} W:{d['ssd_write']:5.1f} | "
+        f"SSD2 R:{d['ssd2_read']:5.1f} W:{d['ssd2_write']:5.1f} MB/s | "
         f"C: {cores_str}",
         flush=True
     )
@@ -304,16 +388,17 @@ def preflight_check(port: str) -> None:
     total_gb = vm.total / 1024**3
     print(f"  RAM           OK  {total_gb:.0f} GB  ({vm.percent:.1f}% utilisé)")
 
-    # Disque I/O
-    try:
-        c = psutil.disk_io_counters()
-        if c is not None:
-            print("  Disque I/O    OK  (psutil.disk_io_counters)")
-        else:
-            print("  Disque I/O    MANQUANT")
-            errors.append("disque I/O")
-    except Exception:
-        print("  Disque I/O    MANQUANT")
+    # Disques SSD (détection)
+    if _SSD_DEVICES:
+        for i, dev in enumerate(_SSD_DEVICES):
+            mount = _SSD_MOUNTS[i] if i < len(_SSD_MOUNTS) else '?'
+            temp_src = _SSD_TEMP_PATHS[i] if i < len(_SSD_TEMP_PATHS) else None
+            caps = get_ssd_capacities()
+            cap = caps[i] if i < len(caps) else (0, 0)
+            print(f"  SSD{i+1} ({dev})  OK  montage:{mount}  {cap[0]}/{cap[1]} GB"
+                  + (f"  hwmon:{temp_src}" if temp_src else "  (pas de temp hwmon)"))
+    else:
+        print("  Disques SSD   MANQUANT  (aucun device nvme/sd détecté)")
         errors.append("disque I/O")
 
     # WiFi
@@ -327,17 +412,15 @@ def preflight_check(port: str) -> None:
     vpn = get_vpn_status()
     print(f"  VPN           {'OK  (actif)' if vpn else 'inactif'}")
 
-    # Température SSD (NVMe)
-    if _SSD_TEMP_PATH:
-        t = get_ssd_temp()
-        print(f"  Temp SSD      OK  {t:.0f}°C  ({_SSD_TEMP_PATH})")
-    else:
-        print("  Temp SSD      MANQUANT  (nvme hwmon non trouvé)")
-        errors.append("température SSD")
-
-    # Capacité SSD
-    su, st = get_ssd_capacity()
-    print(f"  Capacité SSD  OK  {su}/{st} GB  (/)")
+    # Températures SSD
+    temps = get_ssd_temps()
+    for i, t in enumerate(temps):
+        if t > 0:
+            print(f"  Temp SSD{i+1}     OK  {t:.0f}°C")
+        elif i < len(_SSD_DEVICES) and not _SSD_TEMP_PATHS[i]:
+            print(f"  Temp SSD{i+1}     n/a  (USB — pas de hwmon)")
+        else:
+            print(f"  Temp SSD{i+1}     MANQUANT")
 
     # VRAM GPU
     if _VRAM_USED_PATH:
@@ -428,6 +511,9 @@ def run(port: str, baud: int, interval: float) -> None:
                     if now >= next_send:
                         data       = collect()
                         line_bytes = (format_line(data) + "\n").encode("ascii")
+                        if len(line_bytes) > _SERIAL_MAX:
+                            print(f"[WARN] Ligne {len(line_bytes)}B > {_SERIAL_MAX} — tronquée", flush=True)
+                            line_bytes = line_bytes[:_SERIAL_MAX - 1] + b"\n"
                         try:
                             os.write(fd, line_bytes)
                             if _send_count < 5:
@@ -472,6 +558,7 @@ def main() -> None:
                  "ou spécifiez --port /dev/ttyACMx")
 
     print("=== NUC Monitor — vérification démarrage ===")
+    _detect_ssd_devices()
     preflight_check(port)
 
     try:
