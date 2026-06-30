@@ -464,7 +464,7 @@ void ui_update(const SysData *d) {
     // Uptime
     { uint32_t u = d->uptime_s;
       int da = (int)(u / 86400), h = (int)((u % 86400) / 3600), m = (int)((u % 3600) / 60);
-      if (da > 0) lv_label_set_text_fmt(lbl_uptime, "%dj %dh", da, h);
+      if (da > 0) lv_label_set_text_fmt(lbl_uptime, "%dj %dh%dm", da, h, m);
       else        lv_label_set_text_fmt(lbl_uptime, "%dh %dm", h, m); }
     if ((int)d->vpn_on) {
         lv_label_set_text(lbl_vpn, "VPN ON");
