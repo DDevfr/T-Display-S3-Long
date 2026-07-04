@@ -179,8 +179,13 @@ bash tools/deploy.sh
 bash tools/deploy.sh --no-flash
 ```
 
-`deploy.sh` enchaîne automatiquement : arrêt du service → flash ESP32 → mise à jour
-du fichier service si modifié → redémarrage. Affiche le statut systemd à la fin.
+`deploy.sh` enchaîne automatiquement : arrêt du service → flash ESP32 (sauf avec
+`--no-flash`) → mise à jour du fichier service si modifié → redémarrage. Affiche
+le statut systemd à la fin.
+
+Utiliser `--no-flash` dès que seul `monitor_sender.py` (ou `nuc-monitor.service`)
+a changé : ça évite de recompiler/reflasher l'ESP32 pour rien, et redémarre le
+service avec le code Python à jour en quelques secondes.
 
 ### Développement interactif (test manuel du script Python)
 

@@ -60,9 +60,10 @@ _SSD_TEMP_PATHS = []   # [path|None, ...]
 _SSD_MOUNTS     = []   # ['/', '/media/...']
 
 _NET_IFACE      = ''        # interface WiFi active (ex: 'wlp2s0')
+_net_iface_last_check = 0.0 # dernier essai de (re)détection si _NET_IFACE vide
 _net_prev_bytes = (0, 0)    # (bytes_sent, bytes_recv) snapshot précédent
 _net_prev_time  = None
-_net_ema        = 0         # EMA du débit total en KB/s
+_net_ema        = 0.0       # EMA du débit total en KB/s (float, arrondi seulement à l'envoi)
 _rapl_prev      = (0, 0.0)  # (energy_uj, monotonic_time)
 _RAPL_PATH      = '/sys/class/powercap/intel-rapl:0/energy_uj'
 
@@ -272,9 +273,17 @@ def get_gpu_usage() -> float:
 
 def get_net_avg_kbps() -> int:
     """Débit total WiFi lissé par EMA α=0.25 (upload + download, KB/s)."""
-    global _net_prev_bytes, _net_prev_time, _net_ema
+    global _net_prev_bytes, _net_prev_time, _net_ema, _net_iface_last_check
     if not _NET_IFACE:
-        return 0
+        # Le WiFi peut ne pas encore être associé au démarrage du service
+        # (systemd After=network.target ne l'attend pas) : on retente
+        # périodiquement au lieu de rester bloqué sur l'échec initial.
+        now = time.monotonic()
+        if now - _net_iface_last_check >= 5.0:
+            _net_iface_last_check = now
+            _detect_net_iface()
+        if not _NET_IFACE:
+            return 0
     try:
         now   = time.monotonic()
         stats = psutil.net_io_counters(pernic=True).get(_NET_IFACE)
@@ -283,12 +292,12 @@ def get_net_avg_kbps() -> int:
             _net_prev_time  = now
             return 0
         dt    = now - _net_prev_time
-        total = int(((stats.bytes_sent - _net_prev_bytes[0])
-                   + (stats.bytes_recv - _net_prev_bytes[1])) / dt / 1024) if dt > 0 else 0
+        total = (((stats.bytes_sent - _net_prev_bytes[0])
+                   + (stats.bytes_recv - _net_prev_bytes[1])) / dt / 1024) if dt > 0 else 0.0
         _net_prev_bytes = (stats.bytes_sent, stats.bytes_recv)
         _net_prev_time  = now
-        _net_ema = int(0.25 * max(0, total) + 0.75 * _net_ema)
-        return _net_ema
+        _net_ema = 0.25 * max(0.0, total) + 0.75 * _net_ema
+        return round(_net_ema)
     except Exception:
         return 0
 
