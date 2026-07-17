@@ -14,11 +14,13 @@ struct SysData {
     float ssd_temp;
     float ssd_used_gb;
     float ssd_total_gb;
+    uint8_t ssd_health;
     float ssd2_read_mbps;
     float ssd2_write_mbps;
     float ssd2_temp;
     float ssd2_used_gb;
     float ssd2_total_gb;
+    uint8_t ssd2_health;
     float vram_used_mb;
     float vram_total_mb;
     char  wifi_ssid[9];
@@ -28,6 +30,8 @@ struct SysData {
     float    cpu_freq_ghz;
     uint8_t  cpu_power_w;
     uint32_t uptime_s;
+    char     os_kernel[41];
+    uint16_t updates_count;
     bool valid;
 };
 
@@ -36,6 +40,9 @@ struct SysData {
 inline bool parse_sysdata(const char *line, SysData *out) {
     out->valid = false;
     out->wifi_ssid[0] = '\0';
+    out->os_kernel[0] = '\0';
+    out->ssd_health   = 255;
+    out->ssd2_health  = 255;
     out->ssd2_read_mbps = 0.0f;
     out->ssd2_write_mbps = 0.0f;
     out->ssd2_temp = 0.0f;
@@ -45,6 +52,7 @@ inline bool parse_sysdata(const char *line, SysData *out) {
     out->cpu_freq_ghz = 0.0f;
     out->cpu_power_w  = 0;
     out->uptime_s     = 0;
+    out->updates_count = 0;
     char buf[512];
     strncpy(buf, line, sizeof(buf) - 1);
     buf[sizeof(buf) - 1] = '\0';
@@ -68,11 +76,13 @@ inline bool parse_sysdata(const char *line, SysData *out) {
         else if (strcmp(key, "STEMP")== 0) out->ssd_temp       = val;
         else if (strcmp(key, "SCAP") == 0) out->ssd_used_gb    = val;
         else if (strcmp(key, "STOT") == 0) out->ssd_total_gb    = val;
+        else if (strcmp(key, "SHLTH")== 0) out->ssd_health      = (uint8_t)val;
         else if (strcmp(key, "S2RD") == 0) out->ssd2_read_mbps  = val;
         else if (strcmp(key, "S2WR") == 0) out->ssd2_write_mbps = val;
         else if (strcmp(key, "S2TMP")== 0) out->ssd2_temp       = val;
         else if (strcmp(key, "S2CAP")== 0) out->ssd2_used_gb    = val;
         else if (strcmp(key, "S2TOT")== 0) out->ssd2_total_gb   = val;
+        else if (strcmp(key, "S2HLTH")== 0) out->ssd2_health    = (uint8_t)val;
         else if (strcmp(key, "VUSED")== 0) out->vram_used_mb    = val;
         else if (strcmp(key, "VTOT") == 0) out->vram_total_mb  = val;
         else if (strcmp(key, "WNAM") == 0) {
@@ -85,6 +95,11 @@ inline bool parse_sysdata(const char *line, SysData *out) {
         else if (strcmp(key, "CFRQ") == 0) out->cpu_freq_ghz = val / 10.0f;
         else if (strcmp(key, "CPWR") == 0) out->cpu_power_w  = (uint8_t)val;
         else if (strcmp(key, "UPTS") == 0) out->uptime_s     = (uint32_t)val;
+        else if (strcmp(key, "OSKV") == 0) {
+            strncpy(out->os_kernel, colon + 1, sizeof(out->os_kernel) - 1);
+            out->os_kernel[sizeof(out->os_kernel) - 1] = '\0';
+        }
+        else if (strcmp(key, "UPD")  == 0) out->updates_count = (uint16_t)val;
         else if (key[0] == 'C' && key[1] == 'X') {
             char *p = (char*)(colon + 1);
             for (int i = 0; i < 16; i++) {

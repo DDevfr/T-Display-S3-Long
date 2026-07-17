@@ -17,6 +17,7 @@ Usage :
 
 import argparse
 import glob
+import platform
 import re
 import subprocess
 import time
@@ -24,6 +25,11 @@ import sys
 import os
 import termios
 import fcntl
+
+try:
+    import dbus  # optionnel : santé SMART SSD1 via UDisks2 (voir get_ssd_health)
+except ImportError:
+    dbus = None
 
 try:
     import psutil
@@ -52,6 +58,8 @@ _GPU_TEMP_PATH  = _find_sysfs("/sys/class/drm/card*/device/hwmon/hwmon*/temp1_in
 _VRAM_USED_PATH = _find_sysfs("/sys/class/drm/card*/device/mem_info_vram_used")
 _VRAM_TOTAL_PATH= _find_sysfs("/sys/class/drm/card*/device/mem_info_vram_total")
 
+_UPDATES_PATH   = '/var/lib/update-notifier/updates-available'
+
 # ── Détection disques SSD (au démarrage) ─────────────────────────────────────
 _disk_prev      = {}   # {devname: SDiskIOCounters}
 _disk_prev_time = None
@@ -66,6 +74,44 @@ _net_prev_time  = None
 _net_ema        = 0.0       # EMA du débit total en KB/s (float, arrondi seulement à l'envoi)
 _rapl_prev      = (0, 0.0)  # (energy_uj, monotonic_time)
 _RAPL_PATH      = '/sys/class/powercap/intel-rapl:0/energy_uj'
+
+_DBUS_SYSBUS            = None  # dbus.SystemBus(), ouvert une fois au démarrage
+_SSD_HEALTH_DRIVE_PATH  = None  # chemin objet D-Bus UDisks2 du disque SSD1 (NVMe), None si indispo
+_ssd_health_cache       = 255   # dernier % de santé lu (255 = indisponible/inconnu)
+_ssd_health_cache_time  = 0.0
+_SSD_HEALTH_INTERVAL    = 60.0  # throttle : la santé SMART ne varie jamais vite
+
+_SSD2_HEALTH_DRIVE_PATH = None  # chemin objet D-Bus UDisks2 du disque SSD2 (ATA/USB), None si indispo
+_ssd2_health_cache      = 255   # 100 = OK, 20 = WARN, 255 = indisponible/inconnu
+_ssd2_temp_cache        = 0.0
+_ssd2_smart_cache_time  = 0.0
+
+
+def _get_os_label() -> str:
+    """Nom + version de la distribution (ex: 'Zorin OS 18.1').
+    VERSION_ID est parfois tronqué à la version majeure (ex: '18' alors que
+    l'OS est en 18.1) : on préfère VERSION, plus complet, quand il existe."""
+    try:
+        info = platform.freedesktop_os_release()
+        name = info.get('NAME', '').strip()
+        version = (info.get('VERSION') or info.get('VERSION_ID', '')).strip()
+        return f"{name} {version}".strip() or 'Linux'
+    except Exception:
+        return 'Linux'
+
+
+def _get_kernel_label() -> str:
+    """Version noyau tronquée : '6.17.0-40-generic' -> '6.17.040'
+    (segments alphabétiques comme 'generic' jetés, le reste concaténé sans tiret)."""
+    try:
+        parts = platform.release().split('-')
+        return parts[0] + ''.join(p for p in parts[1:] if p.isdigit())
+    except Exception:
+        return platform.release()
+
+
+# Calculés une fois au chargement : ne changent pas en cours d'exécution.
+_OS_KERNEL_LABEL = f"{_get_os_label()} ({_get_kernel_label()})"[:40].replace(',', ' ').replace(':', ' ')
 
 def _detect_net_iface() -> None:
     """Détecte l'interface WiFi active ('wlp2s0', etc.)."""
@@ -118,6 +164,73 @@ def _detect_ssd_devices() -> None:
             temp_path = cands[0] if cands else None
         _SSD_TEMP_PATHS.append(temp_path)
     _SSD_DEVICES = devices
+
+
+def _block_drive_path(dev: str):
+    """Résout le chemin D-Bus UDisks2.Drive associé à un block device (ex: 'nvme0n1')."""
+    block = _DBUS_SYSBUS.get_object(
+        'org.freedesktop.UDisks2', f'/org/freedesktop/UDisks2/block_devices/{dev}')
+    props = dbus.Interface(block, 'org.freedesktop.DBus.Properties')
+    return props.Get('org.freedesktop.UDisks2.Block', 'Drive')
+
+
+def _ensure_dbus_bus() -> bool:
+    """Ouvre _DBUS_SYSBUS si besoin (au cas où l'ouverture initiale aurait échoué)."""
+    global _DBUS_SYSBUS
+    if _DBUS_SYSBUS is not None:
+        return True
+    if dbus is None:
+        return False
+    try:
+        _DBUS_SYSBUS = dbus.SystemBus()
+        return True
+    except Exception:
+        return False
+
+
+def _detect_ssd1_health_path() -> None:
+    """Résout (ou re-tente) le chemin D-Bus du disque SSD1 (NVMe.Controller)."""
+    global _SSD_HEALTH_DRIVE_PATH
+    if not _SSD_DEVICES or not _SSD_DEVICES[0].startswith('nvme'):
+        return
+    try:
+        _SSD_HEALTH_DRIVE_PATH = _block_drive_path(_SSD_DEVICES[0])
+    except Exception:
+        _SSD_HEALTH_DRIVE_PATH = None
+
+
+def _detect_ssd2_health_path() -> None:
+    """Résout (ou re-tente) le chemin D-Bus du disque SSD2 (Drive.Ata). Séparée de
+    _detect_ssd_health() pour pouvoir être ré-essayée en cours de route (cf.
+    _refresh_ssd2_smart) : un flash ESP32 réinitialise le bus USB et peut rendre le
+    pont USB-SATA temporairement invisible pile au démarrage du service."""
+    global _SSD2_HEALTH_DRIVE_PATH
+    if len(_SSD_DEVICES) < 2 or _SSD_DEVICES[1].startswith('nvme'):
+        return
+    try:
+        drive_path = _block_drive_path(_SSD_DEVICES[1])
+        drive = _DBUS_SYSBUS.get_object('org.freedesktop.UDisks2', drive_path)
+        dprops = dbus.Interface(drive, 'org.freedesktop.DBus.Properties')
+        if dprops.Get('org.freedesktop.UDisks2.Drive.Ata', 'SmartSupported'):
+            _SSD2_HEALTH_DRIVE_PATH = drive_path
+    except Exception:
+        _SSD2_HEALTH_DRIVE_PATH = None
+
+
+def _detect_ssd_health() -> None:
+    """Résout les chemins D-Bus UDisks2 des disques SSD1 (NVMe.Controller) et SSD2 (Drive.Ata),
+    utilisés pour lire la santé SMART sans droits root."""
+    global _DBUS_SYSBUS
+    if dbus is None or not _SSD_DEVICES:
+        return
+    try:
+        _DBUS_SYSBUS = dbus.SystemBus()
+    except Exception:
+        _DBUS_SYSBUS = None
+        return
+
+    _detect_ssd1_health_path()
+    _detect_ssd2_health_path()
 
 
 # ── Lecture métriques ─────────────────────────────────────────────────────────
@@ -235,7 +348,7 @@ def get_ssd_temps() -> list[float]:
             except Exception:
                 temps.append(0.0)
         else:
-            temps.append(0.0)
+            temps.append(get_ssd2_temp())
     return temps if temps else [0.0]
 
 
@@ -327,9 +440,96 @@ def get_cpu_power_w() -> int:
     return 0
 
 
+def get_ssd_health() -> int:
+    """% de santé SSD1 (100 - percent_used SMART, via UDisks2/D-Bus, sans root).
+    Retourne 255 si indisponible (pas de NVMe, D-Bus absent, disque déconnecté...).
+    Throttlé à 1 lecture/60s : la santé SMART ne varie pas assez vite pour justifier
+    un appel D-Bus toutes les 0.25s. Si le chemin D-Bus n'a pas pu être résolu (D-Bus
+    pas encore prêt au démarrage, glitch USB...), une nouvelle tentative est faite à
+    chaque cycle throttlé plutôt que d'abandonner définitivement."""
+    global _ssd_health_cache, _ssd_health_cache_time
+    now = time.monotonic()
+    if now - _ssd_health_cache_time < _SSD_HEALTH_INTERVAL:
+        return _ssd_health_cache
+    _ssd_health_cache_time = now
+    if _SSD_HEALTH_DRIVE_PATH is None and _ensure_dbus_bus():
+        _detect_ssd1_health_path()
+    if _SSD_HEALTH_DRIVE_PATH is None:
+        _ssd_health_cache = 255
+        return _ssd_health_cache
+    try:
+        drive = _DBUS_SYSBUS.get_object('org.freedesktop.UDisks2', _SSD_HEALTH_DRIVE_PATH)
+        ctrl = dbus.Interface(drive, 'org.freedesktop.UDisks2.NVMe.Controller')
+        attrs = ctrl.SmartGetAttributes(dbus.Dictionary({}, signature='sv'))
+        percent_used = int(attrs['percent_used'])
+        _ssd_health_cache = max(0, min(100, 100 - percent_used))
+    except Exception:
+        _ssd_health_cache = 255
+    return _ssd_health_cache
+
+
+def _refresh_ssd2_smart() -> None:
+    """Rafraîchit (throttlé, 60s) la santé + température SSD2 via UDisks2/D-Bus (ATA
+    passthrough, sans root). Lit les propriétés déjà en cache côté daemon UDisks2 — PAS
+    d'appel à SmartUpdate() : cette méthode nécessite une autorisation polkit liée à une
+    session active, qui échoue silencieusement (NotAuthorizedCanObtain) pour un service
+    systemd headless. UDisks2 rafraîchit ces valeurs tout seul périodiquement (constaté :
+    quelques minutes de délai max), suffisant pour un indicateur qui varie lentement.
+    Si le chemin D-Bus n'a pas pu être résolu (glitch USB au démarrage — un flash ESP32
+    réinitialise le bus —, D-Bus pas encore prêt...), une nouvelle tentative est faite à
+    chaque cycle throttlé plutôt que d'abandonner définitivement."""
+    global _ssd2_health_cache, _ssd2_temp_cache, _ssd2_smart_cache_time
+    now = time.monotonic()
+    if now - _ssd2_smart_cache_time < _SSD_HEALTH_INTERVAL:
+        return
+    _ssd2_smart_cache_time = now
+    if _SSD2_HEALTH_DRIVE_PATH is None and _ensure_dbus_bus():
+        _detect_ssd2_health_path()
+    if _SSD2_HEALTH_DRIVE_PATH is None:
+        _ssd2_health_cache = 255
+        _ssd2_temp_cache = 0.0
+        return
+    try:
+        drive = _DBUS_SYSBUS.get_object('org.freedesktop.UDisks2', _SSD2_HEALTH_DRIVE_PATH)
+        props = dbus.Interface(drive, 'org.freedesktop.DBus.Properties')
+        failing      = bool(props.Get('org.freedesktop.UDisks2.Drive.Ata', 'SmartFailing'))
+        num_failing  = int(props.Get('org.freedesktop.UDisks2.Drive.Ata', 'SmartNumAttributesFailing'))
+        bad_sectors  = int(props.Get('org.freedesktop.UDisks2.Drive.Ata', 'SmartNumBadSectors'))
+        temp_kelvin  = float(props.Get('org.freedesktop.UDisks2.Drive.Ata', 'SmartTemperature'))
+        warn = failing or num_failing > 0 or bad_sectors > 0
+        _ssd2_health_cache = 20 if warn else 100
+        _ssd2_temp_cache = round(temp_kelvin - 273.15, 1) if temp_kelvin > 0 else 0.0
+    except Exception:
+        _ssd2_health_cache = 255
+        _ssd2_temp_cache = 0.0
+
+
+def get_ssd2_health() -> int:
+    """100 = OK, 20 = WARN, 255 = indisponible. Cf. _refresh_ssd2_smart()."""
+    _refresh_ssd2_smart()
+    return _ssd2_health_cache
+
+
+def get_ssd2_temp() -> float:
+    """Température SSD2 °C (0.0 si indisponible). Cf. _refresh_ssd2_smart()."""
+    _refresh_ssd2_smart()
+    return _ssd2_temp_cache
+
+
 def get_uptime_s() -> int:
     """Uptime système en secondes."""
     return int(time.time() - psutil.boot_time())
+
+
+def get_updates_count() -> int:
+    """Nombre de mises à jour dispo (update-notifier, rafraîchi ~1-2x/jour par
+    apt-daily.timer — pas temps réel, mais lecture de fichier quasi gratuite)."""
+    try:
+        content = open(_UPDATES_PATH).read()
+        m = re.search(r'(\d+)\s+updates?\s+can be applied', content)
+        return int(m.group(1)) if m else 0
+    except Exception:
+        return 0
 
 
 def collect() -> dict:
@@ -360,11 +560,13 @@ def collect() -> dict:
         "ssd_temp":   _tmp(0),
         "ssd_used":   _cap(0, 0),
         "ssd_total":  _cap(0, 1),
+        "ssd_health": get_ssd_health(),
         "ssd2_read":  _io(1, 0),
         "ssd2_write": _io(1, 1),
         "ssd2_temp":  _tmp(1),
         "ssd2_used":  _cap(1, 0),
         "ssd2_total": _cap(1, 1),
+        "ssd2_health": get_ssd2_health(),
         "vram_used":  vram_used,
         "vram_total": vram_total,
         "wifi_ssid":  wifi_ssid,
@@ -374,6 +576,8 @@ def collect() -> dict:
         "cpu_freq":   get_cpu_freq_x10(),
         "cpu_power":  get_cpu_power_w(),
         "uptime":     get_uptime_s(),
+        "os_kernel":  _OS_KERNEL_LABEL,
+        "updates":    get_updates_count(),
     }
 
 
@@ -390,9 +594,11 @@ def format_line(d: dict) -> str:
         f"STEMP:{d['ssd_temp']:.0f}",
         f"SCAP:{d['ssd_used']}",
         f"STOT:{d['ssd_total']}",
+        f"SHLTH:{d['ssd_health']}",
         f"S2TMP:{d['ssd2_temp']:.0f}",
         f"S2CAP:{d['ssd2_used']}",
         f"S2TOT:{d['ssd2_total']}",
+        f"S2HLTH:{d['ssd2_health']}",
         f"VUSED:{d['vram_used']:.0f}",
         f"VTOT:{d['vram_total']:.0f}",
         f"WNAM:{d['wifi_ssid']}",
@@ -404,6 +610,8 @@ def format_line(d: dict) -> str:
         f"CFRQ:{d['cpu_freq']}",
         f"CPWR:{d['cpu_power']}",
         f"UPTS:{d['uptime']}",
+        f"OSKV:{d['os_kernel']}",
+        f"UPD:{d['updates']}",
     ]
     parts.append("CX:" + ";".join(str(v) for v in d["cores"]))
     return ",".join(parts)
@@ -492,6 +700,25 @@ def preflight_check(port: str) -> None:
     else:
         print("  Disques SSD   MANQUANT  (aucun device nvme/sd détecté)")
         errors.append("disque I/O")
+
+    # Santé SMART SSD1 (NVMe, via UDisks2/D-Bus, sans root)
+    health = get_ssd_health()
+    if health <= 100:
+        print(f"  Santé SMART   OK  {health}%")
+    elif dbus is None:
+        print("  Santé SMART   n/a  (module python3-dbus absent)")
+    else:
+        print("  Santé SMART   n/a  (pas de NVMe / UDisks2 indisponible)")
+
+    # Santé + température SSD2 (ATA/USB, via UDisks2/D-Bus, sans root)
+    health2 = get_ssd2_health()
+    if health2 <= 100:
+        print(f"  Santé SMART2  {'OK' if health2 >= 90 else 'ATTENTION':<5} "
+              f"{health2}%  {get_ssd2_temp():.0f}°C")
+    elif dbus is None:
+        print("  Santé SMART2  n/a  (module python3-dbus absent)")
+    else:
+        print("  Santé SMART2  n/a  (pas de SSD2 ATA / UDisks2 indisponible)")
 
     # WiFi
     ssid, sig = get_wifi()
@@ -651,6 +878,7 @@ def main() -> None:
 
     print("=== NUC Monitor — vérification démarrage ===")
     _detect_ssd_devices()
+    _detect_ssd_health()
     _detect_net_iface()
     preflight_check(port)
 

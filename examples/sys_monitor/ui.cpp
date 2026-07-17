@@ -37,9 +37,8 @@ static lv_obj_t *lbl_ram;
 static lv_obj_t *bar_vram;
 static lv_obj_t *lbl_vram;
 
-static lv_obj_t *lbl_ssd_temp,  *lbl_ssd_cap;
+static lv_obj_t *lbl_ssd_temp,  *lbl_ssd_cap,  *lbl_ssd_health;
 static lv_obj_t *lbl_ssd_r,  *lbl_ssd_w,  *bar_ssd,  *lbl_ssd_spd;
-static lv_obj_t *lbl_ssd2_temp, *lbl_ssd2_cap;
 
 static lv_obj_t *bars_core[16];
 static lv_obj_t *lbls_core[16];
@@ -51,6 +50,8 @@ static lv_obj_t *lbl_uptime;
 static lv_obj_t *lbl_cpu_info;
 
 static lv_obj_t *lbl_nosignal;
+static lv_obj_t *lbl_updates;
+static lv_obj_t *lbl_ssd2_name, *lbl_ssd2_health, *lbl_ssd2_temp, *lbl_ssd2_cap;
 
 // ── Helpers ───────────────────────────────────────────────────────────────────
 
@@ -65,6 +66,13 @@ static lv_color_t temp_color(float temp) {
     if (temp < 60.0f) return lv_color_hex(0x00C87A);
     if (temp < 75.0f) return lv_color_hex(0xFFD700);
     if (temp < 85.0f) return lv_color_hex(0xFF8C00);
+    return lv_color_hex(0xFF2222);
+}
+
+// Santé SMART : logique inversée de pct_color (un % élevé est bon, pas mauvais).
+static lv_color_t health_color(uint8_t health) {
+    if (health >= 90) return lv_color_hex(0x00C87A);
+    if (health >= 70) return lv_color_hex(0xFF8C00);
     return lv_color_hex(0xFF2222);
 }
 
@@ -306,7 +314,7 @@ void ui_init(void) {
     // Séparateur
     lv_obj_t *sep3 = lv_obj_create(scr);
     lv_obj_set_size(sep3, SCR_W - 20, 1);
-    lv_obj_set_pos(sep3, 10, Y_RAM - 4);
+    lv_obj_set_pos(sep3, 10, Y_RAM - 8);
     lv_obj_set_style_bg_color(sep3, CLR_DIM, 0);
     lv_obj_set_style_border_width(sep3, 0, 0);
     lv_obj_set_style_radius(sep3, 0, 0);
@@ -365,6 +373,7 @@ void ui_init(void) {
     lv_obj_set_style_radius(sep_ssd, 0, 0);
 
     make_label(scr, "SSD1", CLR_TEXT, &lv_font_montserrat_10, 8, Y_RAM + 65);
+    lbl_ssd_health = make_label(scr, "", CLR_TEXT, &lv_font_montserrat_10, 36, Y_RAM + 65);
     lbl_ssd_temp = lv_label_create(scr);
     lv_label_set_text(lbl_ssd_temp, "--\xc2\xb0""C");
     lv_obj_set_style_text_color(lbl_ssd_temp, CLR_TEXT, 0);
@@ -386,8 +395,8 @@ void ui_init(void) {
     bar_ssd = lv_bar_create(scr);
     lv_bar_set_range(bar_ssd, 0, 100);
     lv_bar_set_value(bar_ssd, 0, LV_ANIM_OFF);
-    lv_obj_set_size(bar_ssd, 90, 16);
-    lv_obj_set_pos(bar_ssd, 30, Y_RAM + 79);
+    lv_obj_set_size(bar_ssd, 80, 16);
+    lv_obj_set_pos(bar_ssd, 36, Y_RAM + 79);
     lv_obj_set_style_bg_color(bar_ssd, CLR_DIM, LV_PART_MAIN);
     lv_obj_set_style_bg_color(bar_ssd, CLR_RAM, LV_PART_INDICATOR);
     lv_obj_set_style_radius(bar_ssd, 4, LV_PART_MAIN);
@@ -401,44 +410,87 @@ void ui_init(void) {
     lv_obj_set_style_text_align(lbl_ssd_spd, LV_TEXT_ALIGN_RIGHT, 0);
     lv_obj_set_pos(lbl_ssd_spd, 122, Y_RAM + 81);
 
-    // SSD2
-    lv_obj_t *sep_ssd2 = lv_obj_create(scr);
-    lv_obj_set_size(sep_ssd2, SCR_W - 20, 1);
-    lv_obj_set_pos(sep_ssd2, 10, Y_RAM + 97);
-    lv_obj_set_style_bg_color(sep_ssd2, CLR_DIM, 0);
-    lv_obj_set_style_border_width(sep_ssd2, 0, 0);
-    lv_obj_set_style_radius(sep_ssd2, 0, 0);
+    // ── Ligne de mises à jour dispo (visible si > 0), sinon ligne SSD2 ───────
+    // Toutes partagent la même position, juste sous la jauge R-W de SSD1 (comme SSD1
+    // partage sa propre ligne entre nom/santé/temp/capacité) : une seule des deux
+    // "familles" de labels est non-vide à la fois.
+    lbl_updates = lv_label_create(scr);
+    lv_label_set_text(lbl_updates, "");
+    lv_obj_set_style_text_color(lbl_updates, CLR_WARN, 0);
+    lv_obj_set_style_text_font(lbl_updates, &lv_font_montserrat_12, 0);
+    lv_obj_set_width(lbl_updates, SCR_W - 16);
+    lv_obj_set_style_text_align(lbl_updates, LV_TEXT_ALIGN_CENTER, 0);
+    lv_label_set_long_mode(lbl_updates, LV_LABEL_LONG_DOT);
+    lv_obj_set_pos(lbl_updates, 8, Y_RAM + 97);
 
-    make_label(scr, "SSD2", CLR_TEXT, &lv_font_montserrat_10, 8, Y_RAM + 101);
+    lbl_ssd2_name = make_label(scr, "", CLR_TEXT, &lv_font_montserrat_10, 8, Y_RAM + 97);
+    lbl_ssd2_health = make_label(scr, "", CLR_TEXT, &lv_font_montserrat_10, 36, Y_RAM + 97);
+
     lbl_ssd2_temp = lv_label_create(scr);
-    lv_label_set_text(lbl_ssd2_temp, "--\xc2\xb0""C");
+    lv_label_set_text(lbl_ssd2_temp, "");
     lv_obj_set_style_text_color(lbl_ssd2_temp, CLR_TEXT, 0);
     lv_obj_set_style_text_font(lbl_ssd2_temp, &lv_font_montserrat_10, 0);
     lv_obj_set_width(lbl_ssd2_temp, SCR_W - 16);
     lv_obj_set_style_text_align(lbl_ssd2_temp, LV_TEXT_ALIGN_CENTER, 0);
-    lv_obj_set_pos(lbl_ssd2_temp, 8, Y_RAM + 101);
+    lv_obj_set_pos(lbl_ssd2_temp, 8, Y_RAM + 97);
+
     lbl_ssd2_cap = lv_label_create(scr);
-    lv_label_set_text(lbl_ssd2_cap, "--/-- GB");
+    lv_label_set_text(lbl_ssd2_cap, "");
     lv_obj_set_style_text_color(lbl_ssd2_cap, CLR_TEXT, 0);
     lv_obj_set_style_text_font(lbl_ssd2_cap, &lv_font_montserrat_10, 0);
     lv_obj_set_width(lbl_ssd2_cap, SCR_W - 16);
     lv_obj_set_style_text_align(lbl_ssd2_cap, LV_TEXT_ALIGN_RIGHT, 0);
-    lv_obj_set_pos(lbl_ssd2_cap, 8, Y_RAM + 101);
+    lv_obj_set_pos(lbl_ssd2_cap, 8, Y_RAM + 97);
 
-
-    // ── No-signal overlay ────────────────────────────────────────────────────
+    // ── Ligne de statut (bas d'écran) ───────────────────────────────────────
     lbl_nosignal = lv_label_create(scr);
     lv_label_set_text(lbl_nosignal, "En attente du PC...");
     lv_obj_set_style_text_color(lbl_nosignal, lv_color_hex(0x555555), 0);
-    lv_obj_set_style_text_font(lbl_nosignal, &lv_font_montserrat_12, 0);
+    lv_obj_set_style_text_font(lbl_nosignal, &lv_font_montserrat_10, 0);
+    lv_obj_set_width(lbl_nosignal, SCR_W - 16);
+    lv_obj_set_style_text_align(lbl_nosignal, LV_TEXT_ALIGN_CENTER, 0);
+    lv_label_set_long_mode(lbl_nosignal, LV_LABEL_LONG_DOT);
     lv_obj_align(lbl_nosignal, LV_ALIGN_BOTTOM_MID, 0, -8);
-    lv_obj_add_flag(lbl_nosignal, LV_OBJ_FLAG_HIDDEN);
 }
 
 void ui_update(const SysData *d) {
     if (!d || !d->valid) { ui_show_no_signal(); return; }
 
-    lv_obj_add_flag(lbl_nosignal, LV_OBJ_FLAG_HIDDEN);
+    lv_obj_set_style_text_color(lbl_nosignal, CLR_TEXT, 0);
+    lv_obj_set_style_text_font(lbl_nosignal, &lv_font_montserrat_12, 0);
+    lv_label_set_text(lbl_nosignal, d->os_kernel[0] ? d->os_kernel : "PC connecté");
+
+    // Ligne partagée : mises à jour dispo en priorité, sinon santé/temp/capa SSD2.
+    if (d->updates_count > 0) {
+        lv_label_set_text_fmt(lbl_updates, "%d maj disponible%s",
+            (int)d->updates_count, d->updates_count > 1 ? "s" : "");
+        lv_label_set_text(lbl_ssd2_name, "");
+        lv_label_set_text(lbl_ssd2_health, "");
+        lv_label_set_text(lbl_ssd2_temp, "");
+        lv_label_set_text(lbl_ssd2_cap, "");
+    } else if (d->ssd2_health <= 100) {
+        lv_label_set_text(lbl_updates, "");
+        lv_label_set_text(lbl_ssd2_name, "SSD2");
+        lv_label_set_text_fmt(lbl_ssd2_health, "%d%%", d->ssd2_health);
+        lv_obj_set_style_text_color(lbl_ssd2_health, health_color(d->ssd2_health), 0);
+        if (d->ssd2_temp > 0.0f) {
+            lv_label_set_text_fmt(lbl_ssd2_temp, "%d\xc2\xb0""C", (int)(d->ssd2_temp + 0.5f));
+            lv_obj_set_style_text_color(lbl_ssd2_temp, temp_color(d->ssd2_temp), 0);
+        } else {
+            lv_label_set_text(lbl_ssd2_temp, "--\xc2\xb0""C");
+            lv_obj_set_style_text_color(lbl_ssd2_temp, CLR_DIM, 0);
+        }
+        if (d->ssd2_total_gb > 0.0f)
+            lv_label_set_text_fmt(lbl_ssd2_cap, "%d/%d GB", (int)d->ssd2_used_gb, (int)d->ssd2_total_gb);
+        else
+            lv_label_set_text(lbl_ssd2_cap, "--/-- GB");
+    } else {
+        lv_label_set_text(lbl_updates, "");
+        lv_label_set_text(lbl_ssd2_name, "");
+        lv_label_set_text(lbl_ssd2_health, "");
+        lv_label_set_text(lbl_ssd2_temp, "");
+        lv_label_set_text(lbl_ssd2_cap, "");
+    }
 
     // WiFi + VPN (header)
     int bars = (int)(d->wifi_sig * 5.0f / 100.0f + 0.5f);
@@ -543,19 +595,12 @@ void ui_update(const SysData *d) {
         lv_label_set_text_fmt(lbl_ssd_cap, "%d/%d GB", (int)d->ssd_used_gb, (int)d->ssd_total_gb);
     else
         lv_label_set_text(lbl_ssd_cap, "--/-- GB");
-
-    // SSD2
-    if (d->ssd2_temp > 0.0f) {
-        lv_label_set_text_fmt(lbl_ssd2_temp, "%d\xc2\xb0""C", (int)(d->ssd2_temp + 0.5f));
-        lv_obj_set_style_text_color(lbl_ssd2_temp, temp_color(d->ssd2_temp), 0);
+    if (d->ssd_health <= 100) {
+        lv_label_set_text_fmt(lbl_ssd_health, "%d%%", d->ssd_health);
+        lv_obj_set_style_text_color(lbl_ssd_health, health_color(d->ssd_health), 0);
     } else {
-        lv_label_set_text(lbl_ssd2_temp, "--\xc2\xb0""C");
-        lv_obj_set_style_text_color(lbl_ssd2_temp, CLR_DIM, 0);
+        lv_label_set_text(lbl_ssd_health, "");
     }
-    if (d->ssd2_total_gb > 0.0f)
-        lv_label_set_text_fmt(lbl_ssd2_cap, "%d/%d GB", (int)d->ssd2_used_gb, (int)d->ssd2_total_gb);
-    else
-        lv_label_set_text(lbl_ssd2_cap, "--/-- GB");
 
     // Per-core bars
     for (int i = 0; i < 16; i++) {
@@ -568,5 +613,12 @@ void ui_update(const SysData *d) {
 }
 
 void ui_show_no_signal(void) {
-    lv_obj_clear_flag(lbl_nosignal, LV_OBJ_FLAG_HIDDEN);
+    lv_obj_set_style_text_color(lbl_nosignal, lv_color_hex(0x555555), 0);
+    lv_obj_set_style_text_font(lbl_nosignal, &lv_font_montserrat_10, 0);
+    lv_label_set_text(lbl_nosignal, "En attente du PC...");
+    lv_label_set_text(lbl_updates, "");
+    lv_label_set_text(lbl_ssd2_name, "");
+    lv_label_set_text(lbl_ssd2_health, "");
+    lv_label_set_text(lbl_ssd2_temp, "");
+    lv_label_set_text(lbl_ssd2_cap, "");
 }

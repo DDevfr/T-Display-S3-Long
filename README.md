@@ -39,12 +39,15 @@ Les métriques sont envoyées du NUC vers l'ESP32 via USB-Serial (CSV) par le sc
 │ VRAM          1/8 GB                 │  ← Idem, VRAM iGPU
 | [════════]                           |
 ├──────────────────────────────────────┤
-│ SSD1  38°C               123/1832 GB │  ← Titre SSD1 : temp. centrée, capa. droite
-│ R - W [════════]             16 KB/s │  ← R et W en vert si actifs (> 512 KB/s)
-├ ─ ─ ─ ─ ─ ─ ─ ─  ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ┤
-│ SSD2  --°C               111/1863 GB │  ← SSD2 (USB Crucial — temp n/a, pas de gauge)
+│ SSD1 100%  38°C          123/1832 GB │  ← Titre SSD1, santé SMART, temp. centrée, capa. droite
+│  R - W  [══════]             16 KB/s │  ← R et W en vert si actifs (> 512 KB/s), gauge centrée entre les 2 textes
+│ SSD2 100%   32°C           480/1863GB│  ← ligne partagée : SSD2 (santé+temp.+capa.) si UPD == 0, sinon msg maj
+│                                       │
+│      Zorin OS 18.1 (6.17.040)        │  ← ligne de statut (bas d'écran) : OSKV si connecté, sinon "En attente du PC..."
 └──────────────────────────────────────┘
 ```
+
+> La ligne SSD2 ci-dessus n'est visible que quand `UPD == 0` (aucune mise à jour dispo) — sinon cette même ligne affiche `N mises à jour disponibles` (orange, centré), comme avant l'ajout de SSD2.
 
 **Couleurs dynamiques** (tous les widgets) :
 - Pourcentage : < 50 % → vert · < 70 % → jaune · < 85 % → orange · ≥ 85 % → rouge
@@ -81,10 +84,11 @@ lib/
 
 ```
 CPU:65,CTEMP:78,GPU:23,GTEMP:62,RAM:68,RTOT:62,
-SREAD:51200,SWRIT:20480,STEMP:38,SCAP:123,STOT:1832,
-S2TMP:0,S2CAP:480,S2TOT:1863,
+SREAD:51200,SWRIT:20480,STEMP:38,SCAP:123,STOT:1832,SHLTH:100,
+S2TMP:32,S2CAP:480,S2TOT:1863,S2HLTH:100,
 VUSED:1489,VTOT:8192,WNAM:Olympe,WSIG:56,VPN:1,
 NTOT:512,CFRQ:32,CPWR:45,UPTS:50998,
+OSKV:Zorin OS 18.1 (6.17.040),UPD:3,
 CX:55;12;8;6;4;3;2;1;78;45;12;8;5;3;2;1
 ```
 
@@ -99,8 +103,10 @@ CX:55;12;8;6;4;3;2;1;78;45;12;8;5;3;2;1
 | `SREAD` / `SWRIT` | Débit SSD1 (NVMe) lecture/écriture en **KB/s** (entier, précision sub-MB/s) |
 | `STEMP` | Température SSD1 °C (sysfs nvme hwmon, entier) |
 | `SCAP` / `STOT` | Espace utilisé / total SSD1 en GB |
-| `S2TMP` | Température SSD2 °C (0 si USB sans hwmon) |
+| `SHLTH` | % de santé SMART SSD1 (`100 - percent_used`, via UDisks2/D-Bus, sans root). `255` = indisponible (pas de NVMe, ou D-Bus/UDisks2 absent) — non affiché sur l'écran dans ce cas |
+| `S2TMP` | Température SSD2 °C. Pas de sysfs hwmon pour ce pont USB-SATA : lue via UDisks2/D-Bus (`Drive.Ata.SmartTemperature`, sans root). `0` si indisponible |
 | `S2CAP` / `S2TOT` | Espace utilisé / total SSD2 en GB |
+| `S2HLTH` | Santé SSD2 : `100` (vert, sain) / `20` (rouge, WARN — `SmartFailing`, attribut en échec, ou secteur défectueux) / `255` = indisponible. Pas de % d'usure fiable sur ATA générique (contrairement au NVMe), d'où un statut binaire affiché en valeurs symboliques. Affiché sur la ligne des mises à jour, uniquement quand `UPD == 0` |
 | `VUSED` / `VTOT` | VRAM utilisée / totale en MB (sysfs amdgpu) |
 | `WNAM` | SSID WiFi (max 8 chars, sanitisé) |
 | `WSIG` | Qualité signal WiFi % (nmcli) — colore le SSID, non affiché en chiffre |
@@ -109,9 +115,11 @@ CX:55;12;8;6;4;3;2;1;78;45;12;8;5;3;2;1
 | `CFRQ` | Fréquence CPU moyenne × 10 (ex: `32` = 3.2 GHz, `psutil.cpu_freq()`) |
 | `CPWR` | Puissance CPU en Watts via RAPL (0 si non lisible sans root) |
 | `UPTS` | Uptime système en secondes (`time.time() − psutil.boot_time()`) |
+| `OSKV` | Nom OS + version + noyau tronqué, ex `Zorin OS 18.1 (6.17.040)` (max 40 chars, affiché sur la ligne du bas quand connecté) |
+| `UPD` | Nombre de mises à jour dispo (`/var/lib/update-notifier/updates-available`, rafraîchi ~1-2x/jour par `apt-daily.timer` — pas temps réel). Ligne orange affichée uniquement si > 0 |
 | `CX` | 16 valeurs % par cœur séparées par `;` (ex: `CX:55;12;8;...;1`) |
 
-> **Note SSD2** : le pont USB-SATA ASMedia ASM235C (driver `uas`) ne remonte pas les lectures dans `/proc/diskstats`. La gauge de débit est donc absente pour SSD2 — seules la capacité et la température (toujours `--°C` côté USB) sont affichées.
+> **Note SSD2** : `S2RD`/`S2WR`/`S2TMP`/`S2CAP`/`S2TOT` restent envoyés par le script Python (le pont USB-SATA ASMedia ASM235C, driver `uas`, ne remonte de toute façon pas les lectures dans `/proc/diskstats`), mais SSD2 n'est plus affiché à l'écran — l'espace a été repris par la ligne de statut et la ligne de mises à jour dispo.
 
 ---
 
@@ -210,6 +218,7 @@ sudo journalctl -u nuc-monitor -f      # logs en direct
 - **Buffer série HWCDC** : le buffer RX logiciel est étendu à 512 octets via `Serial.setRxBufferSize(512)` (défaut = 256). Les buffers de `serial_parser.h` sont également à 512 octets. Le script Python tronque les lignes dépassant 510 octets avant envoi. En cas de ligne trop longue côté firmware, `serial_read_line()` rejette la ligne entière (flag `overflow`) plutôt que de parser des données tronquées.
 - **Double-open série** : l'ouverture de `/dev/ttyACM0` sous Linux déclenche un reset USB-JTAG. Le script ouvre deux fois le port (drain + close entre les deux) pour obtenir une session cdc-acm propre.
 - **Protocole compact** : les 16 cœurs CPU sont encodés dans un seul champ `CX:v;v;...;v` (séparateur `;`) au lieu de 16 champs `C0`…`C15`. Les débits SSD sont en KB/s entier (pas en MB/s décimal) pour une meilleure précision sub-MB/s. Taille typique d'un message : ~280 octets (max ~295 octets, sous les 510 du buffer).
+- **Troncature `OSKV`** : la version noyau (`platform.release()`, ex: `6.17.0-40-generic`) est compactée en jetant les segments alphabétiques (`generic`, `lowlatency`, ...) et en concaténant sans tiret les segments numériques restants avec le premier segment : `6.17.0-40-generic` → `6.17.040`. La chaîne finale `OS_NAME OS_VERSION (kernel)` est tronquée à 40 caractères et nettoyée des `,`/`:` (délimiteurs du protocole) avant envoi. Calculée une seule fois au démarrage du script (ne change pas en cours d'exécution), comme le SSID WiFi tronqué à 8 caractères.
 - **Débit réseau EMA** : `get_net_avg_kbps()` calcule le total upload + download sur l'interface WiFi (`wl*`) et le lisse via une moyenne exponentielle (α=0.25 ≈ constante de temps ~1 s). Affiché en KB/s ou MB/s selon le débit, identique à un indicateur de copie de fichier.
 - **Fréquence CPU** : `psutil.cpu_freq()` retourne la fréquence courante en MHz ; transmise × 10 pour conserver une décimale entière (ex: 32 = 3.2 GHz). Décodée côté firmware avec division entière.
 - **Puissance CPU RAPL** : `/sys/class/powercap/intel-rapl:0/energy_uj` — lecture root uniquement par défaut. Retourne 0 si non accessible ; l'affichage s'adapte (`X.X GHz` seul, sans `XXW`). Pour l'activer sans root : `SUBSYSTEM=="powercap", ACTION=="add", RUN+="/bin/chmod o+r /sys/class/powercap/intel-rapl:0/energy_uj"` dans `/etc/udev/rules.d/99-rapl.rules`.
@@ -218,8 +227,10 @@ sudo journalctl -u nuc-monitor -f      # logs en direct
 - **Temp NVMe** : `/sys/class/nvme/nvme0/hwmon*/temp1_input` (millidegrés → divisé par 1000).
 - **VPN detection** : `psutil.net_if_stats()` — toute interface contenant `tun`, `tap`, `vpn` ou `wg` et marquée UP est considérée VPN actif (couvre `qtun`, `tun0`, `wg0`, etc.).
 - **Rétroéclairage PWM** : backlight sur `TFT_BL` (GPIO 1) via LEDC, canal 0, 5 kHz, 8-bit. `BL_BRIGHTNESS = 153` ≈ 60 % dans `sys_monitor.ino` — modifier cette valeur pour ajuster la luminosité (0–255).
-- **Gauge SSD1** : barre unique affichant `R+W` cumulés en KB/s. Échelle : 20 000 KB/s (≈ 20 MB/s) = 100 %. Affichage dynamique : `KB/s` sous 10 240 KB/s, `MB/s` au-dessus. Les indicateurs R et W s'allument en vert au-dessus de 512 KB/s.
-- **SSD2 sans gauge** : le pont USB-SATA ASMedia ASM235C (driver `uas`, `/dev/sdc`) ne met pas à jour `/proc/diskstats` pour les lectures — seules les écritures fsync'd sont comptabilisées avec délai. La gauge est donc supprimée ; seules la capacité et la température sont affichées.
+- **Gauge SSD1** : barre unique affichant `R+W` cumulés en KB/s, centrée entre les labels `R - W` et le débit affiché à droite. Échelle : 20 000 KB/s (≈ 20 MB/s) = 100 %. Affichage dynamique : `KB/s` sous 10 240 KB/s, `MB/s` au-dessus. Les indicateurs R et W s'allument en vert au-dessus de 512 KB/s.
+- **Santé SMART SSD1** : lue via l'interface D-Bus `org.freedesktop.UDisks2.NVMe.Controller` (méthode `SmartGetAttributes`, propriété `percent_used`), exposée par le service `UDisks2` déjà actif sur le système — **aucun droit root requis** (contrairement à `smartctl`/`nvme-cli` classiques, qui nécessitent un accès direct au device `/dev/nvme0`). Uniquement disponible pour le disque NVMe (SSD1) ; le module Python `dbus` (paquet système `python3-dbus`, déjà présent) est optionnel — son absence désactive juste la fonctionnalité. La lecture D-Bus est throttlée à 1×/60 s côté script (`_SSD_HEALTH_INTERVAL`), la santé SMART ne variant pas assez vite pour justifier un appel à chaque cycle de 0.25 s.
+- **Santé + température SSD2** : SSD2 (Crucial CT2000MX500SSD1, pont USB-SATA ASMedia ASM235C) n'a pas d'attribut SMART standardisé de type "% d'usure" comme le NVMe (les attributs ATA propriétaires varient par fabricant) — lu à la place via l'interface `org.freedesktop.UDisks2.Drive.Ata` (ATA passthrough/SAT à travers le pont USB, toujours sans root). Statut de santé basé sur `SmartFailing` (agrégat officiel, équivalent `smartctl -H`), `SmartNumAttributesFailing` et `SmartNumBadSectors` : affiché en valeurs symboliques `100 %` (sain, vert) / `20 %` (WARN, rouge) plutôt qu'un vrai pourcentage mesuré, pour rester visuellement cohérent avec la jauge SSD1 sans donner une fausse précision. La température (`SmartTemperature`, absente de tout sysfs hwmon pour ce pont USB) est lue sur la même interface. Contrairement au NVMe, UDisks2 ne rafraîchit pas ces valeurs en continu (`SmartUpdated` peut dater de plus d'une heure) : le script appelle explicitement `SmartUpdate()` avant chaque lecture throttlée à 60 s (`_refresh_ssd2_smart()`), pour éviter d'afficher une valeur figée.
+- **SSD2 non affiché** : le pont USB-SATA ASMedia ASM235C (driver `uas`, `/dev/sdc`) ne met pas à jour `/proc/diskstats` pour les lectures — seules les écritures fsync'd sont comptabilisées avec délai. La gauge avait déjà été supprimée pour cette raison ; l'affichage SSD2 (temp./capacité) a depuis été retiré entièrement de l'écran au profit de la ligne de statut et de la ligne de mises à jour dispo. Les champs `S2*` restent transmis par le script Python (parsés côté firmware) mais ne sont plus utilisés dans `ui.cpp`.
 - **Détection SSD** : `_detect_ssd_devices()` filtre les périphériques avec `taille ≥ 1 GB` pour exclure les gadgets USB 0-octet (sda/sdb exposés par l'ESP32 en mass-storage). Le NVMe est toujours sélectionné en premier.
 - **Intervalle polling Python** : 0.25 s par défaut dans `monitor_sender.py`. Configurable via `--interval`.
 
