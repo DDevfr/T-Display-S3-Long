@@ -33,6 +33,10 @@ struct SysData {
     char     os_kernel[41];
     uint16_t updates_count;
     uint8_t  screen_on;
+    uint8_t  kbd_bat;      // 255 = absent
+    uint8_t  kbd_chg;
+    uint8_t  mouse_bat;    // 255 = absent
+    uint8_t  mouse_chg;
     bool valid;
 };
 
@@ -55,6 +59,10 @@ inline bool parse_sysdata(const char *line, SysData *out) {
     out->uptime_s     = 0;
     out->updates_count = 0;
     out->screen_on     = 1;
+    out->kbd_bat       = 255;
+    out->kbd_chg       = 0;
+    out->mouse_bat     = 255;
+    out->mouse_chg     = 0;
     char buf[512];
     strncpy(buf, line, sizeof(buf) - 1);
     buf[sizeof(buf) - 1] = '\0';
@@ -103,6 +111,10 @@ inline bool parse_sysdata(const char *line, SysData *out) {
         }
         else if (strcmp(key, "UPD")  == 0) out->updates_count = (uint16_t)val;
         else if (strcmp(key, "SCR")  == 0) out->screen_on     = (uint8_t)val;
+        else if (strcmp(key, "KBAT") == 0) out->kbd_bat       = (uint8_t)val;
+        else if (strcmp(key, "KCHG") == 0) out->kbd_chg       = (uint8_t)val;
+        else if (strcmp(key, "MBAT") == 0) out->mouse_bat     = (uint8_t)val;
+        else if (strcmp(key, "MCHG") == 0) out->mouse_chg     = (uint8_t)val;
         else if (key[0] == 'C' && key[1] == 'X') {
             char *p = (char*)(colon + 1);
             for (int i = 0; i < 16; i++) {

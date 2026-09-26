@@ -53,6 +53,10 @@ static lv_obj_t *lbl_nosignal;
 static lv_obj_t *lbl_updates;
 static lv_obj_t *lbl_ssd2_name, *lbl_ssd2_health, *lbl_ssd2_temp, *lbl_ssd2_cap;
 
+// Piles clavier (gauche de l'arc GPU) / souris (droite) : nom, icône, %
+static lv_obj_t *lbl_kbd_name,   *lbl_kbd_icon,   *lbl_kbd_pct;
+static lv_obj_t *lbl_mouse_name, *lbl_mouse_icon, *lbl_mouse_pct;
+
 // ── Helpers ───────────────────────────────────────────────────────────────────
 
 static lv_color_t pct_color(float pct) {
@@ -74,6 +78,23 @@ static lv_color_t health_color(uint8_t health) {
     if (health >= 90) return lv_color_hex(0x00C87A);
     if (health >= 70) return lv_color_hex(0xFF8C00);
     return lv_color_hex(0xFF2222);
+}
+
+// Pile : logique inversée de pct_color (un % élevé est bon), 4 niveaux.
+static lv_color_t battery_color(uint8_t pct) {
+    if (pct >= 60) return lv_color_hex(0x00C87A);
+    if (pct >= 35) return lv_color_hex(0xFFD700);
+    if (pct >= 15) return lv_color_hex(0xFF8C00);
+    return lv_color_hex(0xFF2222);
+}
+
+static const char *battery_symbol(uint8_t pct, bool charging) {
+    if (charging)  return LV_SYMBOL_CHARGE;
+    if (pct >= 80) return LV_SYMBOL_BATTERY_FULL;
+    if (pct >= 60) return LV_SYMBOL_BATTERY_3;
+    if (pct >= 35) return LV_SYMBOL_BATTERY_2;
+    if (pct >= 10) return LV_SYMBOL_BATTERY_1;
+    return LV_SYMBOL_BATTERY_EMPTY;
 }
 
 static lv_obj_t *make_arc(lv_obj_t *parent, lv_color_t accent,
@@ -111,6 +132,32 @@ static lv_obj_t *make_label(lv_obj_t *parent, const char *txt,
     lv_obj_set_style_text_font(lbl, font, 0);
     lv_obj_set_pos(lbl, x, y);
     return lbl;
+}
+
+// Label centré dans une colonne de largeur w (colonnes piles autour de l'arc GPU)
+static lv_obj_t *make_col_label(lv_obj_t *parent, const lv_font_t *font,
+                                int x, int y, int w) {
+    lv_obj_t *lbl = make_label(parent, "", CLR_GRAY, font, x, y);
+    lv_obj_set_width(lbl, w);
+    lv_obj_set_style_text_align(lbl, LV_TEXT_ALIGN_CENTER, 0);
+    return lbl;
+}
+
+// Colonne pile d'un périphérique : vide si absent (255), sinon icône + % colorés.
+static void set_battery(lv_obj_t *name, lv_obj_t *icon, lv_obj_t *pct_lbl,
+                        const char *txt, uint8_t pct, uint8_t charging) {
+    if (pct > 100) {
+        lv_label_set_text(name, "");
+        lv_label_set_text(icon, "");
+        lv_label_set_text(pct_lbl, "");
+        return;
+    }
+    lv_color_t c = battery_color(pct);
+    lv_label_set_text(name, txt);
+    lv_label_set_text(icon, battery_symbol(pct, charging));
+    lv_obj_set_style_text_color(icon, c, 0);
+    lv_label_set_text_fmt(pct_lbl, "%d%%", (int)pct);
+    lv_obj_set_style_text_color(pct_lbl, c, 0);
 }
 
 // ── Public API ────────────────────────────────────────────────────────────────
@@ -311,6 +358,18 @@ void ui_init(void) {
     lv_obj_set_style_text_align(lbl_gpu_model, LV_TEXT_ALIGN_CENTER, 0);
     lv_obj_align_to(lbl_gpu_model, arc_gpu, LV_ALIGN_CENTER, 0, +43);
 
+    // Piles : colonnes libres de part et d'autre de l'arc GPU (x 40..140),
+    // centrées verticalement sur l'arc. Clavier à gauche, souris à droite.
+    const int BAT_W = 38;
+    const int BAT_XL = 1, BAT_XR = SCR_W - BAT_W - 1;
+    const int BAT_Y = Y_GPU + 38;
+    lbl_kbd_name   = make_col_label(scr, &lv_font_montserrat_10, BAT_XL, BAT_Y,      BAT_W);
+    lbl_kbd_icon   = make_col_label(scr, &lv_font_montserrat_12, BAT_XL, BAT_Y + 12, BAT_W);
+    lbl_kbd_pct    = make_col_label(scr, &lv_font_montserrat_10, BAT_XL, BAT_Y + 27, BAT_W);
+    lbl_mouse_name = make_col_label(scr, &lv_font_montserrat_10, BAT_XR, BAT_Y,      BAT_W);
+    lbl_mouse_icon = make_col_label(scr, &lv_font_montserrat_12, BAT_XR, BAT_Y + 12, BAT_W);
+    lbl_mouse_pct  = make_col_label(scr, &lv_font_montserrat_10, BAT_XR, BAT_Y + 27, BAT_W);
+
     // Séparateur
     lv_obj_t *sep3 = lv_obj_create(scr);
     lv_obj_set_size(sep3, SCR_W - 20, 1);
@@ -492,6 +551,10 @@ void ui_update(const SysData *d) {
         lv_label_set_text(lbl_ssd2_cap, "");
     }
 
+    // Piles clavier / souris
+    set_battery(lbl_kbd_name,   lbl_kbd_icon,   lbl_kbd_pct,   "KB", d->kbd_bat,   d->kbd_chg);
+    set_battery(lbl_mouse_name, lbl_mouse_icon, lbl_mouse_pct, "MS", d->mouse_bat, d->mouse_chg);
+
     // WiFi + VPN (header)
     int bars = (int)(d->wifi_sig * 5.0f / 100.0f + 0.5f);
     if (bars > 5) bars = 5;
@@ -621,4 +684,6 @@ void ui_show_no_signal(void) {
     lv_label_set_text(lbl_ssd2_health, "");
     lv_label_set_text(lbl_ssd2_temp, "");
     lv_label_set_text(lbl_ssd2_cap, "");
+    set_battery(lbl_kbd_name,   lbl_kbd_icon,   lbl_kbd_pct,   "", 255, 0);
+    set_battery(lbl_mouse_name, lbl_mouse_icon, lbl_mouse_pct, "", 255, 0);
 }

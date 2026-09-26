@@ -532,6 +532,59 @@ def get_updates_count() -> int:
         return 0
 
 
+# ── Piles souris / clavier (UPower via D-Bus système) ─────────────────────────
+# UPower déclare parfois une souris HID++ en Type=6 (keyboard) : on classe
+# d'abord par nom de modèle, le Type ne sert que de repli.
+
+_KBD_MODEL_RE   = re.compile(r'keyboard|clavier|\bK\d{3}\b', re.I)
+_MOUSE_MODEL_RE = re.compile(r'mouse|souris|MX (Anywhere|Master|Vertical)|\bM\d{3}\b', re.I)
+_UPOWER_TYPE_MOUSE    = 5
+_UPOWER_TYPE_KEYBOARD = 6
+_UPOWER_STATE_CHARGING = 1
+_PERIPH_BAT_CACHE      = (255, 0, 255, 0)
+_PERIPH_BAT_NEXT       = 0.0
+_PERIPH_BAT_INTERVAL   = 60.0   # s — niveaux de pile qui bougent lentement
+
+
+def get_peripheral_batteries() -> tuple[int, int, int, int]:
+    """(clavier %, clavier en charge, souris %, souris en charge).
+    % = 255 si périphérique absent ou UPower indisponible."""
+    global _PERIPH_BAT_CACHE, _PERIPH_BAT_NEXT
+    now = time.monotonic()
+    if now < _PERIPH_BAT_NEXT:
+        return _PERIPH_BAT_CACHE
+    _PERIPH_BAT_NEXT = now + _PERIPH_BAT_INTERVAL
+
+    kbd, mouse = (255, 0), (255, 0)
+    if not _ensure_dbus_bus():
+        _PERIPH_BAT_CACHE = (*kbd, *mouse)
+        return _PERIPH_BAT_CACHE
+    try:
+        upower = _DBUS_SYSBUS.get_object('org.freedesktop.UPower',
+                                         '/org/freedesktop/UPower')
+        paths = dbus.Interface(upower, 'org.freedesktop.UPower').EnumerateDevices()
+        for path in paths:
+            dev   = _DBUS_SYSBUS.get_object('org.freedesktop.UPower', path)
+            props = dbus.Interface(dev, 'org.freedesktop.DBus.Properties') \
+                        .GetAll('org.freedesktop.UPower.Device')
+            if props.get('PowerSupply', True) or not props.get('IsPresent', False):
+                continue
+            model = str(props.get('Model', ''))
+            dtype = int(props.get('Type', 0))
+            entry = (max(0, min(100, int(round(float(props.get('Percentage', 0)))))),
+                     int(int(props.get('State', 0)) == _UPOWER_STATE_CHARGING))
+            if _KBD_MODEL_RE.search(model):
+                kbd = entry
+            elif _MOUSE_MODEL_RE.search(model) or dtype == _UPOWER_TYPE_MOUSE:
+                mouse = entry
+            elif dtype == _UPOWER_TYPE_KEYBOARD:
+                kbd = entry
+    except Exception:
+        pass
+    _PERIPH_BAT_CACHE = (*kbd, *mouse)
+    return _PERIPH_BAT_CACHE
+
+
 # ── Veille écran NUC (Mutter PowerSaveMode via D-Bus session) ─────────────────
 # PowerSaveMode = état DPMS réel (0 = allumé, 3 = éteint), piloté par gsd-power.
 # Repasse à 0 dès que souris/clavier rallument l'écran, y compris sur l'écran
@@ -584,6 +637,7 @@ def collect() -> dict:
     vram_used, vram_total = get_vram()
     wifi_ssid, wifi_sig  = get_wifi()
     net_total            = get_net_avg_kbps()
+    kbd_bat, kbd_chg, mouse_bat, mouse_chg = get_peripheral_batteries()
 
     def _io(i, j):  return io[i][j]   if i < len(io)    else 0.0
     def _tmp(i):    return temps[i]    if i < len(temps)  else 0.0
@@ -620,6 +674,10 @@ def collect() -> dict:
         "uptime":     get_uptime_s(),
         "os_kernel":  _OS_KERNEL_LABEL,
         "updates":    get_updates_count(),
+        "kbd_bat":    kbd_bat,
+        "kbd_chg":    kbd_chg,
+        "mouse_bat":  mouse_bat,
+        "mouse_chg":  mouse_chg,
     }
 
 
@@ -655,6 +713,10 @@ def format_line(d: dict) -> str:
         f"OSKV:{d['os_kernel']}",
         f"UPD:{d['updates']}",
         f"SCR:{d.get('screen_on', 1)}",
+        f"KBAT:{d['kbd_bat']}",
+        f"KCHG:{d['kbd_chg']}",
+        f"MBAT:{d['mouse_bat']}",
+        f"MCHG:{d['mouse_chg']}",
     ]
     parts.append("CX:" + ";".join(str(v) for v in d["cores"]))
     return ",".join(parts)
@@ -673,6 +735,7 @@ def print_dashboard(d: dict) -> None:
         f"RAM {d['ram_pct']:.1f}% | "
         f"SSD1 R:{d['ssd_read']:5.1f} W:{d['ssd_write']:5.1f} | "
         f"SSD2 R:{d['ssd2_read']:5.1f} W:{d['ssd2_write']:5.1f} MB/s | "
+        f"KB {d['kbd_bat']}% MS {d['mouse_bat']}% | "
         f"C: {cores_str}",
         flush=True
     )
