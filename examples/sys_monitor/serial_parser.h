@@ -32,6 +32,7 @@ struct SysData {
     uint32_t uptime_s;
     char     os_kernel[41];
     uint16_t updates_count;
+    uint8_t  screen_on;
     bool valid;
 };
 
@@ -53,6 +54,7 @@ inline bool parse_sysdata(const char *line, SysData *out) {
     out->cpu_power_w  = 0;
     out->uptime_s     = 0;
     out->updates_count = 0;
+    out->screen_on     = 1;
     char buf[512];
     strncpy(buf, line, sizeof(buf) - 1);
     buf[sizeof(buf) - 1] = '\0';
@@ -100,6 +102,7 @@ inline bool parse_sysdata(const char *line, SysData *out) {
             out->os_kernel[sizeof(out->os_kernel) - 1] = '\0';
         }
         else if (strcmp(key, "UPD")  == 0) out->updates_count = (uint16_t)val;
+        else if (strcmp(key, "SCR")  == 0) out->screen_on     = (uint8_t)val;
         else if (key[0] == 'C' && key[1] == 'X') {
             char *p = (char*)(colon + 1);
             for (int i = 0; i < 16; i++) {

@@ -553,5 +553,14 @@ void lcd_PushColors(uint16_t *data, uint32_t len)
 
 void lcd_sleep()
 {
-    lcd_send_cmd(0x10, NULL, 0);
+    lcd_send_cmd(0x28, NULL, 0);   // display off
+    lcd_send_cmd(0x10, NULL, 0);   // sleep in
+    delay(5);
+}
+
+void lcd_wake()
+{
+    lcd_send_cmd(0x11, NULL, 0);   // sleep out
+    delay(120);
+    lcd_send_cmd(0x29, NULL, 0);   // display on
 }

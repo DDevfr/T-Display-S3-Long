@@ -532,6 +532,48 @@ def get_updates_count() -> int:
         return 0
 
 
+# ── Veille écran NUC (Mutter PowerSaveMode via D-Bus session) ─────────────────
+# PowerSaveMode = état DPMS réel (0 = allumé, 3 = éteint), piloté par gsd-power.
+# Repasse à 0 dès que souris/clavier rallument l'écran, y compris sur l'écran
+# de verrouillage (contrairement à ScreenSaver.Active).
+
+_SESSION_BUS_ADDR       = f"unix:path=/run/user/{os.getuid()}/bus"
+_SESSION_BUS            = None
+_SESSION_BUS_RETRY_TIME = 0.0
+_SESSION_BUS_RETRY      = 30.0   # s entre deux tentatives si session absente
+
+
+def get_display_off() -> bool | None:
+    """True si l'écran du NUC est éteint, False s'il est allumé,
+    None si l'état est inconnu (pas de session GNOME, dbus absent...)."""
+    global _SESSION_BUS, _SESSION_BUS_RETRY_TIME
+    if dbus is None:
+        return None
+    if _SESSION_BUS is None:
+        now = time.monotonic()
+        if now < _SESSION_BUS_RETRY_TIME:
+            return None
+        _SESSION_BUS_RETRY_TIME = now + _SESSION_BUS_RETRY
+        try:
+            _SESSION_BUS = dbus.bus.BusConnection(_SESSION_BUS_ADDR)
+        except Exception:
+            return None
+    try:
+        obj   = _SESSION_BUS.get_object('org.gnome.Mutter.DisplayConfig',
+                                        '/org/gnome/Mutter/DisplayConfig')
+        props = dbus.Interface(obj, 'org.freedesktop.DBus.Properties')
+        mode  = props.Get('org.gnome.Mutter.DisplayConfig', 'PowerSaveMode',
+                          timeout=1.0)
+        return int(mode) != 0
+    except Exception:
+        try:
+            _SESSION_BUS.close()
+        except Exception:
+            pass
+        _SESSION_BUS = None
+        return None
+
+
 def collect() -> dict:
     vm      = psutil.virtual_memory()
     cores   = psutil.cpu_percent(percpu=True)
@@ -612,6 +654,7 @@ def format_line(d: dict) -> str:
         f"UPTS:{d['uptime']}",
         f"OSKV:{d['os_kernel']}",
         f"UPD:{d['updates']}",
+        f"SCR:{d.get('screen_on', 1)}",
     ]
     parts.append("CX:" + ";".join(str(v) for v in d["cores"]))
     return ",".join(parts)
@@ -749,6 +792,13 @@ def preflight_check(port: str) -> None:
         print("  VRAM GPU      MANQUANT  (mem_info_vram_used non trouvé)")
         errors.append("VRAM GPU")
 
+    # Veille écran (Mutter PowerSaveMode)
+    off = get_display_off()
+    if off is None:
+        print("  Veille écran  n/a  (bus de session / Mutter indisponible — écran ESP32 toujours allumé)")
+    else:
+        print(f"  Veille écran  OK  (Mutter PowerSaveMode, écran NUC {'éteint' if off else 'allumé'})")
+
     # Threads CPU
     cores = psutil.cpu_percent(percpu=True)
     if len(cores) >= 16:
@@ -766,11 +816,19 @@ def preflight_check(port: str) -> None:
 
 # ── Boucle principale ─────────────────────────────────────────────────────────
 
-def run(port: str, baud: int, interval: float) -> None:
+_DISPLAY_POLL_INTERVAL = 1.0   # s entre deux lectures de PowerSaveMode
+
+
+def run(port: str, baud: int, interval: float, sleep_delay: float) -> None:
     psutil.cpu_percent(percpu=True)   # premier appel toujours à 0, on le jette
     time.sleep(0.2)
 
     reconnect_delay = 3.0
+
+    # Veille écran ESP32 : sleep_delay s après l'extinction de l'écran du NUC
+    display_off_since = None
+    screen_on         = 1
+    next_display_poll = 0.0
 
     while True:
         try:
@@ -827,8 +885,26 @@ def run(port: str, baud: int, interval: float) -> None:
             try:
                 while True:
                     now = time.monotonic()
+                    if sleep_delay > 0 and now >= next_display_poll:
+                        next_display_poll = now + _DISPLAY_POLL_INTERVAL
+                        if get_display_off():
+                            if display_off_since is None:
+                                display_off_since = now
+                                print("Écran NUC éteint — veille ESP32 dans "
+                                      f"{sleep_delay:.0f}s", flush=True)
+                        elif display_off_since is not None:
+                            display_off_since = None
+                            print("Écran NUC rallumé", flush=True)
+                        new_on = int(display_off_since is None
+                                     or now - display_off_since < sleep_delay)
+                        if new_on != screen_on:
+                            screen_on = new_on
+                            print(f"Écran ESP32 → {'réveil' if screen_on else 'veille'}",
+                                  flush=True)
+                            next_send = now   # transmettre le changement sans attendre
                     if now >= next_send:
                         data       = collect()
+                        data["screen_on"] = screen_on
                         line_bytes = (format_line(data) + "\n").encode("ascii")
                         if len(line_bytes) > _SERIAL_MAX:
                             print(f"[WARN] Ligne {len(line_bytes)}B > {_SERIAL_MAX} — tronquée", flush=True)
@@ -869,6 +945,9 @@ def main() -> None:
     parser.add_argument("--baud",     type=int,   default=115200)
     parser.add_argument("--interval", type=float, default=0.25,
                         help="Intervalle d'envoi en secondes (défaut: 0.25)")
+    parser.add_argument("--sleep-delay", type=float, default=600,
+                        help="Délai (s) après l'extinction de l'écran du NUC avant "
+                             "la veille de l'écran ESP32 (défaut: 600, 0 = jamais)")
     args = parser.parse_args()
 
     port = args.port or auto_detect_port()
@@ -883,7 +962,7 @@ def main() -> None:
     preflight_check(port)
 
     try:
-        run(port, args.baud, args.interval)
+        run(port, args.baud, args.interval, args.sleep_delay)
     except KeyboardInterrupt:
         print("\nArrêté.")
 

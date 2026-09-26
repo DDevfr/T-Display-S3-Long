@@ -97,6 +97,35 @@ void my_touchpad_read(lv_indev_drv_t *indev_driver, lv_indev_data_t *data) {
 static uint32_t last_data_ms = 0;
 static bool signal_lost = false;
 
+// ── Rétroéclairage PWM (5 kHz, 8-bit) ─────────────────────────────────────────
+#define BL_PWM_CHANNEL 0
+#define BL_BRIGHTNESS  153   // 0–255 ; 153 ≈ 60 %
+
+extern uint32_t transfer_num;
+extern size_t   lcd_PushColors_len;
+
+// ── Veille écran (pilotée par le champ SCR du NUC) ────────────────────────────
+static bool screen_asleep = false;
+
+static void screen_sleep() {
+    // Terminer le transfert DMA en cours avant d'envoyer des commandes LCD
+    while (transfer_num > 0 || lcd_PushColors_len > 0) {
+        if (transfer_num <= 1 && lcd_PushColors_len > 0)
+            lcd_PushColors(0, 0, 0, 0, NULL);
+        delay(1);
+    }
+    ledcWrite(BL_PWM_CHANNEL, 0);
+    lcd_sleep();
+    screen_asleep = true;
+}
+
+static void screen_wake() {
+    lcd_wake();
+    screen_asleep = false;
+    lv_obj_invalidate(lv_scr_act());   // redessin complet au prochain lv_timer_handler()
+    ledcWrite(BL_PWM_CHANNEL, BL_BRIGHTNESS);
+}
+
 // ── Setup ─────────────────────────────────────────────────────────────────────
 void setup() {
     Serial.setRxBufferSize(512);
@@ -132,9 +161,7 @@ void setup() {
     Wire.write(0x09); Wire.write(0x64);
     Wire.endTransmission();
 
-    // Rétroéclairage à 60 % via PWM (5 kHz, 8-bit) pour préserver la LED
-    #define BL_PWM_CHANNEL 0
-    #define BL_BRIGHTNESS  153   // 0–255 ; 153 ≈ 60 %
+    // Rétroéclairage à 60 % via PWM pour préserver la LED
     ledcSetup(BL_PWM_CHANNEL, 5000, 8);
     ledcAttachPin(TFT_BL, BL_PWM_CHANNEL);
     ledcWrite(BL_PWM_CHANNEL, BL_BRIGHTNESS);
@@ -173,9 +200,6 @@ void setup() {
     ui_show_no_signal();
 }
 
-extern uint32_t transfer_num;
-extern size_t   lcd_PushColors_len;
-
 // ── Loop ──────────────────────────────────────────────────────────────────────
 void loop() {
     SysData data;
@@ -183,14 +207,22 @@ void loop() {
         last_data_ms = millis();
         signal_lost  = false;
         ui_update(&data);
+        if (!data.screen_on && !screen_asleep)
+            screen_sleep();
+        else if (data.screen_on && screen_asleep)
+            screen_wake();
     }
 
     if (!signal_lost && (millis() - last_data_ms > NO_SIGNAL_TIMEOUT_MS)) {
         signal_lost = true;
         ui_show_no_signal();
+        if (screen_asleep)
+            screen_wake();   // NUC muet : afficher « no signal » plutôt qu'un écran noir
     }
 
     delay(1);
+    if (screen_asleep)
+        return;   // pas de rendu LVGL pendant la veille
     if (transfer_num <= 0 && lcd_PushColors_len <= 0)
         lv_timer_handler();
     if (transfer_num <= 1 && lcd_PushColors_len > 0)
