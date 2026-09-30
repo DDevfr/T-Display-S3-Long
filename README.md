@@ -2,7 +2,7 @@
 
 Moniteur système graphique pour NUC AMD (Ryzen 9 7940HS + Radeon 780M) affiché sur un écran T-Display-S3-Long (ESP32-S3, 180×640 px portrait).
 
-Les métriques sont envoyées du NUC vers l'ESP32 via USB-Serial (CSV) par le script Python `tools/monitor_sender.py`.
+Les métriques sont envoyées du NUC vers l'ESP32 via USB-Serial (CSV) par le script Python `tools/monitor_sender.py`. Un second écran, affiché avec le bouton BOOT, montre le top 12 des processus avec l'icône de leur appli (voir [Écran 2 — Top processus](#écran-2--top-processus)).
 
 ---
 
@@ -22,7 +22,7 @@ Les métriques sont envoyées du NUC vers l'ESP32 via USB-Serial (CSV) par le sc
 
 ```
 ┌──────────────────────────────────────┐
-│ Olympe |||..                  VPN ON │  ← ligne 1 : SSID + barres (font_12) | VPN (font_12)
+│ WifiSSID |||..                VPN ON │  ← ligne 1 : SSID + barres (font_12) | VPN (font_12)
 │ 512 KB/s                    14h 09m  │  ← ligne 2 : débit réseau (font_12) | uptime (font_12)
 ├──────────────────────────────────────┤  ← séparateur header / CPU
 │         Arc CPU  %  °C               │  ← CPU % (font_20) + °C, couleur dynamique
@@ -65,13 +65,15 @@ Les métriques sont envoyées du NUC vers l'ESP32 via USB-Serial (CSV) par le sc
 ```
 examples/sys_monitor/
 ├── sys_monitor.ino     # Boucle principale (setup/loop)
-├── ui.h / ui.cpp       # Interface LVGL (init + update)
-├── serial_parser.h     # Parser CSV non-bloquant
+├── ui.h / ui.cpp       # Interface LVGL (init + update, écran 2 top processus)
+├── serial_parser.h     # Parser non-bloquant (trames CPU:, P:, I:)
+├── icon_cache.h / .cpp # Cache PSRAM des icônes d'applis (écran 2)
 ├── AXS15231B.h / .cpp  # Driver écran QSPI (DMA, veille lcd_sleep/lcd_wake)
 └── pins_config.h       # Brochage et résolution
 
 tools/
 ├── monitor_sender.py       # Script Python NUC → ESP32
+├── proc_top.py             # Top 12 processus + icônes d'applis (écran 2)
 ├── nuc-monitor.service     # Fichier service systemd
 ├── install-autostart.sh    # Script d'installation autostart pour linux
 ├── dev-mode.sh             # Arrête/relance le service pour développement ESP32
@@ -137,6 +139,7 @@ CX:55;12;8;6;4;3;2;1;78;45;12;8;5;3;2;1
 ```bash
 pip install psutil pyserial
 sudo apt install python3-dbus   # optionnel (déjà présent sur Zorin) : santé SMART SSD1/SSD2 + veille écran ESP32 + piles souris/clavier
+sudo apt install python3-pil python3-gi gir1.2-gdkpixbuf-2.0   # optionnel (déjà présents sur Zorin) : icônes de l'écran 2 (Pillow requis, GdkPixbuf pour les SVG)
 ```
 
 ### Lancer manuellement
@@ -221,10 +224,104 @@ sudo journalctl -u nuc-monitor -f      # logs en direct
 
 ---
 
+## Écran 2 — Top processus
+
+Un appui sur le **bouton BOOT** (GPIO0) bascule de l'écran principal vers le top 12 des processus ; un nouvel appui revient à l'écran principal (pas de retour automatique). Le toucher fait la même chose, mais le contrôleur tactile de la carte actuelle ne répond pas (voir « Tactile » ci-dessous). Appuyer sur BOOT pendant le fonctionnement ne fait que changer d'écran : il ne fait passer l'ESP32 en mode flash que s'il est maintenu pendant un appui sur RST. Chaque ligne : icône de l'appli (la même que dans le moniteur système GNOME) + nom du processus + %CPU façon `top` (100 % = un thread saturé, jusqu'à 1600 % sur les 16 threads), avec une barre de 4 px et la couleur `pct_color()`. Le titre rappelle le CPU global.
+
+```
+┌──────────────────────────────────────┐
+│ TOP CPU                     CPU 23%  │
+├──────────────────────────────────────┤
+│ [ic]  code                    75%    │  ← icône 32×32 reçue du PC
+│       ▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬                │
+│ [B ]  brave                   12%    │  ← pastille (initiale) tant que l'icône n'est pas arrivée
+│       ▬▬▬                            │
+│  …    12 lignes de 48 px             │
+└──────────────────────────────────────┘
+```
+
+### Échanges PC ↔ ESP32
+
+- **Le Python produit les données** : il ne sait pas quel écran est affiché et envoie le top processus en permanence.
+- **L'ESP32 affiche et bascule localement** : le bouton BOOT (ou le toucher) ne passe pas par le PC (bascule instantanée, écran 2 déjà à jour).
+- **Seul cas où l'ESP32 parle au PC** : il demande une icône qui lui manque.
+
+```
+      NUC (Python)                          câble USB                    ESP32
+ ═════════════════════════                                  ═══════════════════════════
+ ┌─ Boucle principale ─────┐
+ │                         │   ① toutes les 0,25 s
+ │  métriques système ─────┼──── CPU:45,CTEMP:62,...,CX:.. ──────►  Écran 1
+ │                         │   ② toutes les 1 s (+0,125 s)
+ │  top 12 processus ──────┼──── P:a1b2;153;firefox|c3d4;42;code|.. ►  garde le top 12
+ │  (/proc)                │                                            │
+ │                         │                                   icône a1b2 connue ?
+ │                         │                                    ├─ oui → affichée
+ │                         │                                    └─ non → pastille « F »
+ │                         │   ③ demande d'icône                        │
+ │  lit les demandes ◄─────┼──────────────── ?I:a1b2 ◄───────────────┘ (relance / 2 s)
+ │        ▼                │   ④ icône en 8 morceaux
+ │  file d'envoi ──────────┼──── I:a1b2;0..7;8;<base64> ──────────►  cache PSRAM (48)
+ │  (max 1 icône / 100 ms) │                                         vérif hash → affichée
+ └─────────▲───────────────┘
+ ┌─ Thread séparé ─────────┐                                    ┌─────────────────┐
+ │  processus → appli      │                                    │ BOUTON BOOT     │
+ │  → icône du thème       │                                    │ écran 1 ⇄ 2     │
+ │  → 32×32 → hash (cache) │                                    │ (sans le PC)    │
+ └─────────────────────────┘                                    └─────────────────┘
+```
+
+> `a1b2` est un hash abrégé : en réalité 8 caractères hexadécimaux.
+
+| Sens | Trame | Fréquence | Contenu |
+|------|-------|-----------|---------|
+| PC → ESP | `P:h;pct;nom\|h;pct;nom\|…` | 1 s | 12 entrées max. `h` = hash de l'icône en 8 hexa (`00000000` = pas encore d'icône) ; `pct` = %CPU × 10 entier (ex. `153` = 15,3 %) ; `nom` = nom du processus (15 car. max, ASCII, `\|` `;` `,` `:` remplacés par `_`). ~380 octets au pire |
+| PC → ESP | `I:h;idx;n;<base64>` | à la demande | Morceau `idx` (0–7) sur `n` = 8 d'une icône 32×32 RGB565 big-endian (2048 o, alpha pré-mélangé sur le fond `0x0D0D0D`) : 256 o par morceau, 360 caractères par ligne |
+| ESP → PC | `?I:h` | si une icône manque | Demande d'icône, relancée toutes les 2 s tant qu'elle n'est pas complète |
+
+`h` est le hash **FNV-1a 32 bits du contenu** de l'icône (jamais 0), calculé des deux côtés.
+
+| Situation | Ce qui se passe |
+|-----------|-----------------|
+| Trame `P:` perdue ou corrompue | L'écran 1 n'est pas touché ; la suivante arrive 1 s plus tard |
+| L'ESP32 redémarre (cache vide) | Il voit des hash inconnus et redemande les icônes tout seul |
+| Morceau d'icône abîmé | Le hash recalculé ne correspond pas → icône rejetée puis redemandée |
+| Processus sans appli (démon, script, thread noyau) | Icône générique `application-x-executable`, comme le moniteur système |
+| Plusieurs processus avec la même icône | Même hash → envoyée et stockée une seule fois |
+| Plus de trame `P:` pendant 5 s | L'écran 2 est vidé |
+
+**Côté NUC** (`tools/proc_top.py`) :
+- Le %CPU est calculé en lisant directement `/proc/<pid>/stat` (~6 ms pour ~480 processus, contre ~20 ms via psutil) ; nom et exécutable ne sont lus que pour le top 12.
+- L'appli d'un processus est trouvée, dans l'ordre, par : l'id d'appli du scope systemd (`app-gnome-brave\x2dbrowser-….scope` → `brave-browser.desktop`), à condition que l'exécutable soit dans le dossier de l'appli (un `bash` lancé dans le terminal de VS Code garde donc l'icône générique) ; le nom de l'exécutable (`Exec=`, `StartupWMClass=`) ; le dossier privé de l'appli (les helpers de Brave, rangés dans le scope `org.chromium.Chromium`, sont reconnus par `/opt/brave.com/brave/`).
+- L'icône est cherchée dans le thème actif (`org.gnome.desktop.interface icon-theme`, lu sans session graphique car le service n'a pas de `DISPLAY`), ses thèmes hérités, `hicolor` puis `/usr/share/pixmaps` ; chargée par GdkPixbuf (PNG/SVG/XPM) puis convertie par Pillow.
+- Recherche et rendu tournent dans un thread séparé : tant qu'une icône n'est pas prête, le hash envoyé est `0` et l'ESP32 affiche la pastille. Les rendus sont mis en cache dans `~/.cache/nuc-monitor/icons/` (clé = chemin + date de modification de l'image). Aucune commande externe n'est lancée.
+- Sans Pillow, les trames `P:` sont envoyées sans icônes (pastilles uniquement).
+
+**Tactile** : sur la carte actuelle, le contrôleur tactile de l'AXS15231B ne répond pas à son adresse `0x3B`. Il reste en mode bootloader : il répond en `0x58` et renvoie des octets de firmware. Le firmware `factory` de LilyGo reste lui aussi bloqué (écran noir), et une coupure d'alimentation n'y change rien : le problème vient de la carte. La bascule passe donc par le bouton BOOT, avec un anti-rebond de 30 ms. Le code du tactile reste en place : il suit l'ordre de démarrage des exemples LilyGo, sonde `0x3B` toutes les 2 s et n'accepte que des réponses plausibles (1 ou 2 doigts, coordonnées dans l'écran). Il prendra le relais si le contrôleur se remet à répondre.
+
+**Côté ESP32** : `icon_cache.cpp` garde 48 icônes en PSRAM (~96 Ko, éviction LRU) ; `loop()` traite jusqu'à 16 lignes par tour pour absorber les 8 lignes d'une icône.
+
+### Cadence et décalage des envois
+
+Les trames `CPU:` (0,25 s), `P:` (1 s) et `I:` (à la demande) ne se gênent pas :
+
+- **Un seul envoyeur** : une seule boucle Python écrit sur le port, les lignes partent l'une après l'autre et ne peuvent pas se mélanger.
+- **L'ESP32 découpe par ligne** (`\n`) et dirige chaque ligne selon son préfixe (`P:`, `I:`, sinon trame principale).
+- **Décalage** : `P:` part 0,125 s après la trame principale, et jamais dans le même tour de boucle.
+- **Tampon de sortie unique** : si le FIFO USB est plein, `os.write` n'écrit qu'une partie ; le reste est gardé et envoyé au tour suivant (10 ms plus tard) au lieu d'être perdu. Si l'ESP32 ne lit plus du tout (plus de 1 Ko en attente), les nouvelles trames d'écran sont sautées plutôt qu'empilées.
+- **Icônes en dernier** : les 8 lignes d'une icône (~2,9 Ko) ne partent que si aucune trame d'écran n'attend, au maximum une icône toutes les 100 ms. Le tampon RX de l'ESP32 fait 4096 octets.
+
+```
+0 ──── 0.125 ──── 0.25 ──── 0.5 ──── 0.75 ──── 1.0 ──── 1.125
+[CPU]   [P:]      [CPU]     [CPU]    [CPU]     [CPU]    [P:]
+```
+
+---
+
 ## Points techniques notables
 
 - **HWCDC vs HardwareSerial** : l'ESP32-S3 expose `Serial` en HWCDC quand `ARDUINO_USB_CDC_ON_BOOT=1`. Sans ce flag, `Serial.available()` reste toujours à 0.
-- **Buffer série HWCDC** : le buffer RX logiciel est étendu à 512 octets via `Serial.setRxBufferSize(512)` (défaut = 256). Les buffers de `serial_parser.h` sont également à 512 octets. Le script Python tronque les lignes dépassant 510 octets avant envoi. En cas de ligne trop longue côté firmware, `serial_read_line()` rejette la ligne entière (flag `overflow`) plutôt que de parser des données tronquées.
+- **Buffer série HWCDC** : le buffer RX logiciel est étendu à 4096 octets via `Serial.setRxBufferSize(4096)` (défaut = 256) pour absorber une icône complète (8 lignes `I:`) pendant un rendu LVGL. Le buffer de ligne de `serial_parser.h` reste à 512 octets. `Serial.setTxTimeoutMs(0)` : les demandes `?I:` ne bloquent jamais si le PC ne lit pas. Le script Python tronque les lignes dépassant 510 octets avant envoi. En cas de ligne trop longue côté firmware, `serial_read_line()` rejette la ligne entière (flag `overflow`) plutôt que de parser des données tronquées.
 - **Double-open série** : l'ouverture de `/dev/ttyACM0` sous Linux déclenche un reset USB-JTAG. Le script ouvre deux fois le port (drain + close entre les deux) pour obtenir une session cdc-acm propre.
 - **Protocole compact** : les 16 cœurs CPU sont encodés dans un seul champ `CX:v;v;...;v` (séparateur `;`) au lieu de 16 champs `C0`…`C15`. Les débits SSD sont en KB/s entier (pas en MB/s décimal) pour une meilleure précision sub-MB/s. Taille typique d'un message : ~295 octets mesurés, pire cas estimé ~385 octets (OSKV à 40 caractères, 16 cœurs à 100 %, débits SSD à 7 chiffres), soit plus de 120 octets de marge sous les 510 du buffer. Vérifier ce budget avant tout ajout de champ.
 - **Troncature `OSKV`** : la version noyau (`platform.release()`, ex: `6.17.0-40-generic`) est compactée en jetant les segments alphabétiques (`generic`, `lowlatency`, ...) et en concaténant sans tiret les segments numériques restants avec le premier segment : `6.17.0-40-generic` → `6.17.040`. La chaîne finale `OS_NAME OS_VERSION (kernel)` est tronquée à 40 caractères et nettoyée des `,`/`:` (délimiteurs du protocole) avant envoi. Calculée une seule fois au démarrage du script (ne change pas en cours d'exécution), comme le SSID WiFi tronqué à 8 caractères.
@@ -275,6 +372,9 @@ sudo systemctl status nuc-monitor
 **Les piles souris/clavier n'apparaissent pas (colonnes vides à côté de l'arc GPU)**
 → Vérifier qu'UPower voit les périphériques : `upower -d` doit lister la souris (`hidpp_battery_*`) et le clavier (`keyboard_dev_*`) avec un `percentage`. Si un périphérique est listé mais affiché du mauvais côté, son nom de modèle ne correspond pas aux motifs `_KBD_MODEL_RE` / `_MOUSE_MODEL_RE` de `monitor_sender.py` : les compléter. Les valeurs étant rafraîchies toutes les 60 s, attendre jusqu'à 1 min après un changement (branchement en charge, rallumage du clavier).
 
+**L'écran 2 reste vide ou les icônes restent des pastilles**
+→ Écran 2 vide : le script Python ne transmet plus de trame `P:` depuis 5 s (ancienne version du script, ou script arrêté) ; relancer `bash tools/deploy.sh --no-flash`. Pastilles permanentes : Pillow est absent (`sudo apt install python3-pil`), ou l'appli n'a pas d'icône trouvable ; la pastille est alors le comportement normal. Les icônes déjà rendues sont dans `~/.cache/nuc-monitor/icons/`, et ce dossier peut être supprimé sans risque.
+
 **Le service systemd ne démarre pas**
 → `sudo journalctl -u nuc-monitor -f` pour voir les erreurs. Vérifier que l'ESP32 est branché ou laisser le service : il reconnecte automatiquement.
 
@@ -285,3 +385,4 @@ sudo systemctl status nuc-monitor
 - [LVGL 8.3.0](https://github.com/lvgl/lvgl) — ne pas mettre à jour (rotation logicielle forcée)
 - [XPowersLib](https://github.com/lewisxhe/XPowersLib)
 - psutil, pyserial (Python)
+- Pillow, PyGObject / GdkPixbuf (Python, optionnels : icônes de l'écran 2)

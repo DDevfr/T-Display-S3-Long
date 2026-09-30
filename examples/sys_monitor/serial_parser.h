@@ -1,5 +1,6 @@
 #pragma once
 #include <Arduino.h>
+#include "icon_cache.h"
 
 struct SysData {
     float cpu_pct;
@@ -131,9 +132,50 @@ inline bool parse_sysdata(const char *line, SysData *out) {
     return true;
 }
 
+// ── Écran 2 : top processus (trame "P:h;pct10;nom|h;pct10;nom|...") ─────────
+#define PROC_MAX 12
+
+struct ProcEntry {
+    uint32_t icon;      // hash de l'icône, 0 = pas d'icône (pastille)
+    uint16_t pct10;     // %CPU façon top × 10 (peut dépasser 1000)
+    char     name[16];
+};
+
+struct ProcData {
+    uint8_t   n;
+    ProcEntry e[PROC_MAX];
+};
+
+// `line` pointe après le préfixe "P:". Une entrée mal formée est ignorée.
+inline bool parse_procs(char *line, ProcData *out) {
+    out->n = 0;
+    char *save = NULL;
+    for (char *tok = strtok_r(line, "|", &save);
+         tok != NULL && out->n < PROC_MAX;
+         tok = strtok_r(NULL, "|", &save)) {
+        char *p1 = strchr(tok, ';');
+        char *p2 = p1 ? strchr(p1 + 1, ';') : NULL;
+        if (!p2) continue;
+        ProcEntry &e = out->e[out->n++];
+        e.icon  = strtoul(tok, NULL, 16);
+        long pct = strtol(p1 + 1, NULL, 10);
+        e.pct10 = pct < 0 ? 0 : (pct > 65535 ? 65535 : (uint16_t)pct);
+        strncpy(e.name, p2 + 1, sizeof(e.name) - 1);
+        e.name[sizeof(e.name) - 1] = '\0';
+    }
+    return true;
+}
+
+enum FrameType {
+    FRAME_NONE,         // pas de ligne complète (ou ligne ignorée)
+    FRAME_SYS,          // trame principale → *sys rempli
+    FRAME_PROCS,        // trame P: → *procs rempli
+    FRAME_ICON,         // trame I: qui a complété une icône valide
+};
+
 // Non-blocking serial accumulator; call every loop().
-// Returns true and fills `out` when a complete line is received.
-inline bool serial_read_line(SysData *out) {
+// Renvoie le type de la ligne complète reçue, routée selon son préfixe.
+inline FrameType serial_read_line(SysData *sys, ProcData *procs) {
     static char buf[512];
     static int  pos      = 0;
     static bool overflow = false;   // ligne trop longue → rejeter jusqu'au prochain \n
@@ -144,7 +186,12 @@ inline bool serial_read_line(SysData *out) {
             if (pos > 0 && !overflow) {
                 buf[pos] = '\0';
                 pos      = 0;
-                return parse_sysdata(buf, out);
+                // Le strtok(',') de parse_sysdata ne doit jamais voir P:/I:
+                if (buf[0] == 'P' && buf[1] == ':')
+                    return parse_procs(buf + 2, procs) ? FRAME_PROCS : FRAME_NONE;
+                if (buf[0] == 'I' && buf[1] == ':')
+                    return icon_store_chunk(buf + 2) ? FRAME_ICON : FRAME_NONE;
+                return parse_sysdata(buf, sys) ? FRAME_SYS : FRAME_NONE;
             }
             pos      = 0;
             overflow = false;
@@ -154,5 +201,5 @@ inline bool serial_read_line(SysData *out) {
             overflow = true;    // buffer plein : ligne corrompue, on la jette entièrement
         }
     }
-    return false;
+    return FRAME_NONE;
 }

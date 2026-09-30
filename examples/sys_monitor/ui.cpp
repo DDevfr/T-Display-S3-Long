@@ -1,4 +1,5 @@
 #include "ui.h"
+#include "icon_cache.h"
 
 // ── Palette ──────────────────────────────────────────────────────────────────
 #define CLR_BG        lv_color_hex(0x0D0D0D)
@@ -56,6 +57,29 @@ static lv_obj_t *lbl_ssd2_name, *lbl_ssd2_health, *lbl_ssd2_temp, *lbl_ssd2_cap;
 // Piles clavier (gauche de l'arc GPU) / souris (droite) : nom, icône, %
 static lv_obj_t *lbl_kbd_name,   *lbl_kbd_icon,   *lbl_kbd_pct;
 static lv_obj_t *lbl_mouse_name, *lbl_mouse_icon, *lbl_mouse_pct;
+
+// ── Écran 2 : top processus ─────────────────────────────────────────────────
+#define Y_PROC_ROWS  32     // sous le titre
+#define PROC_ROW_H   48     // 12 × 48 = 576 → jusqu'à y = 608
+#define PROC_ICON_X  4
+#define PROC_TEXT_X  42
+
+struct ProcRow {
+    lv_obj_t *cont;          // ligne entière (masquée si pas de processus)
+    lv_obj_t *img;           // icône reçue du PC
+    lv_obj_t *badge;         // pastille de repli (initiale)
+    lv_obj_t *badge_lbl;
+    lv_obj_t *name;
+    lv_obj_t *pct;
+    lv_obj_t *bar;
+    uint32_t  shown_icon;    // hash affiché dans img, 0 = pastille
+};
+
+static lv_obj_t *scr_main, *scr_procs;
+static lv_obj_t *lbl_procs_cpu;
+static lv_obj_t *lbl_procs_status;
+static ProcRow   proc_rows[PROC_MAX];
+static ProcData  last_procs;
 
 // ── Helpers ───────────────────────────────────────────────────────────────────
 
@@ -160,10 +184,156 @@ static void set_battery(lv_obj_t *name, lv_obj_t *icon, lv_obj_t *pct_lbl,
     lv_obj_set_style_text_color(pct_lbl, c, 0);
 }
 
+// Conteneur transparent sans style ni scroll (lignes de l'écran 2)
+static lv_obj_t *make_plain(lv_obj_t *parent, int x, int y, int w, int h) {
+    lv_obj_t *o = lv_obj_create(parent);
+    lv_obj_remove_style_all(o);
+    lv_obj_set_pos(o, x, y);
+    lv_obj_set_size(o, w, h);
+    lv_obj_clear_flag(o, LV_OBJ_FLAG_SCROLLABLE | LV_OBJ_FLAG_CLICKABLE);
+    return o;
+}
+
+// Couleur de pastille stable par nom de processus
+static lv_color_t badge_color(const char *name) {
+    static const uint32_t palette[] = {
+        0x5B6EE1, 0x00A8FF, 0x00C87A, 0xE0A000,
+        0xE35D6A, 0xA66CFF, 0x2EC4B6, 0xFF8C42,
+    };
+    uint32_t h = 2166136261u;
+    for (const char *c = name; *c; c++) { h ^= (uint8_t)*c; h *= 16777619u; }
+    return lv_color_hex(palette[h % (sizeof(palette) / sizeof(palette[0]))]);
+}
+
+static void procs_init(void) {
+    scr_procs = lv_obj_create(NULL);
+    lv_obj_set_style_bg_color(scr_procs, CLR_BG, 0);
+    lv_obj_set_style_bg_opa(scr_procs, LV_OPA_COVER, 0);
+    lv_obj_clear_flag(scr_procs, LV_OBJ_FLAG_SCROLLABLE);
+
+    // Titre : « TOP CPU » à gauche, CPU global à droite
+    make_label(scr_procs, "TOP CPU", CLR_TEXT, &lv_font_montserrat_14, 8, 7);
+    lbl_procs_cpu = lv_label_create(scr_procs);
+    lv_label_set_text(lbl_procs_cpu, "--%");
+    lv_obj_set_style_text_color(lbl_procs_cpu, CLR_GRAY, 0);
+    lv_obj_set_style_text_font(lbl_procs_cpu, &lv_font_montserrat_14, 0);
+    lv_obj_align(lbl_procs_cpu, LV_ALIGN_TOP_RIGHT, -8, 7);
+
+    lv_obj_t *sep = lv_obj_create(scr_procs);
+    lv_obj_set_size(sep, SCR_W - 20, 1);
+    lv_obj_set_pos(sep, 10, Y_PROC_ROWS - 4);
+    lv_obj_set_style_bg_color(sep, CLR_DIM, 0);
+    lv_obj_set_style_border_width(sep, 0, 0);
+    lv_obj_set_style_radius(sep, 0, 0);
+
+    for (int i = 0; i < PROC_MAX; i++) {
+        ProcRow &r = proc_rows[i];
+        r.cont = make_plain(scr_procs, 0, Y_PROC_ROWS + i * PROC_ROW_H, SCR_W, PROC_ROW_H);
+
+        r.img = lv_img_create(r.cont);
+        lv_obj_set_pos(r.img, PROC_ICON_X, 8);
+        lv_obj_set_size(r.img, ICON_W, ICON_W);
+        lv_obj_add_flag(r.img, LV_OBJ_FLAG_HIDDEN);
+
+        r.badge = make_plain(r.cont, PROC_ICON_X, 8, ICON_W, ICON_W);
+        lv_obj_set_style_radius(r.badge, 7, 0);
+        lv_obj_set_style_bg_opa(r.badge, LV_OPA_COVER, 0);
+        r.badge_lbl = lv_label_create(r.badge);
+        lv_obj_set_style_text_font(r.badge_lbl, &lv_font_montserrat_20, 0);
+        lv_obj_set_style_text_color(r.badge_lbl, lv_color_white(), 0);
+        lv_obj_center(r.badge_lbl);
+
+        r.name = make_label(r.cont, "", CLR_TEXT, &lv_font_montserrat_12, PROC_TEXT_X, 10);
+        lv_obj_set_width(r.name, 88);
+        lv_label_set_long_mode(r.name, LV_LABEL_LONG_DOT);
+
+        r.pct = make_label(r.cont, "", CLR_TEXT, &lv_font_montserrat_12, SCR_W - 4 - 46, 10);
+        lv_obj_set_width(r.pct, 46);
+        lv_obj_set_style_text_align(r.pct, LV_TEXT_ALIGN_RIGHT, 0);
+
+        r.bar = lv_bar_create(r.cont);
+        lv_bar_set_range(r.bar, 0, 100);
+        lv_obj_set_size(r.bar, SCR_W - 4 - PROC_TEXT_X, 4);
+        lv_obj_set_pos(r.bar, PROC_TEXT_X, 32);
+        lv_obj_set_style_bg_color(r.bar, CLR_DIM, LV_PART_MAIN);
+        lv_obj_set_style_radius(r.bar, 2, LV_PART_MAIN);
+        lv_obj_set_style_radius(r.bar, 2, LV_PART_INDICATOR);
+
+        r.shown_icon = 0;
+        lv_obj_add_flag(r.cont, LV_OBJ_FLAG_HIDDEN);
+    }
+
+    lbl_procs_status = lv_label_create(scr_procs);
+    lv_label_set_text(lbl_procs_status, "En attente du PC...");
+    lv_obj_set_style_text_color(lbl_procs_status, lv_color_hex(0x555555), 0);
+    lv_obj_set_style_text_font(lbl_procs_status, &lv_font_montserrat_10, 0);
+    lv_obj_set_width(lbl_procs_status, SCR_W - 16);
+    lv_obj_set_style_text_align(lbl_procs_status, LV_TEXT_ALIGN_CENTER, 0);
+    lv_obj_align(lbl_procs_status, LV_ALIGN_BOTTOM_MID, 0, -8);
+}
+
+// Icône reçue si disponible, sinon pastille colorée avec l'initiale
+static void proc_row_set_icon(ProcRow &r, const ProcEntry &e) {
+    const lv_img_dsc_t *dsc = icon_get(e.icon);
+    if (dsc) {
+        if (r.shown_icon != e.icon) {
+            lv_img_set_src(r.img, dsc);
+            r.shown_icon = e.icon;
+        }
+        lv_obj_clear_flag(r.img, LV_OBJ_FLAG_HIDDEN);
+        lv_obj_add_flag(r.badge, LV_OBJ_FLAG_HIDDEN);
+    } else {
+        char initial[2] = { (char)toupper((unsigned char)e.name[0]), '\0' };
+        lv_label_set_text(r.badge_lbl, initial);
+        lv_obj_set_style_bg_color(r.badge, badge_color(e.name), 0);
+        lv_obj_clear_flag(r.badge, LV_OBJ_FLAG_HIDDEN);
+        lv_obj_add_flag(r.img, LV_OBJ_FLAG_HIDDEN);
+        r.shown_icon = 0;
+    }
+}
+
 // ── Public API ────────────────────────────────────────────────────────────────
+
+void ui_toggle_page(void) {
+    lv_scr_load(lv_scr_act() == scr_procs ? scr_main : scr_procs);
+}
+
+void ui_update_procs(const ProcData *p) {
+    last_procs = *p;
+    for (int i = 0; i < PROC_MAX; i++) {
+        ProcRow &r = proc_rows[i];
+        if (i >= p->n) {
+            lv_obj_add_flag(r.cont, LV_OBJ_FLAG_HIDDEN);
+            continue;
+        }
+        const ProcEntry &e = p->e[i];
+        lv_obj_clear_flag(r.cont, LV_OBJ_FLAG_HIDDEN);
+        proc_row_set_icon(r, e);
+        lv_label_set_text(r.name, e.name);
+
+        // lv_snprintf ne supporte pas %f : 1 décimale sous 10 %, entier au-delà
+        int pct = (e.pct10 + 5) / 10;
+        if (e.pct10 < 100)
+            lv_label_set_text_fmt(r.pct, "%d.%d%%", e.pct10 / 10, e.pct10 % 10);
+        else
+            lv_label_set_text_fmt(r.pct, "%d%%", pct);
+        int clamped = pct > 100 ? 100 : pct;
+        lv_color_t c = pct_color((float)clamped);
+        lv_obj_set_style_text_color(r.pct, c, 0);
+        lv_bar_set_value(r.bar, clamped, LV_ANIM_OFF);
+        lv_obj_set_style_bg_color(r.bar, c, LV_PART_INDICATOR);
+    }
+}
+
+void ui_refresh_proc_icons(void) {
+    for (int i = 0; i < last_procs.n; i++)
+        if (proc_rows[i].shown_icon != last_procs.e[i].icon)
+            proc_row_set_icon(proc_rows[i], last_procs.e[i]);
+}
 
 void ui_init(void) {
     lv_obj_t *scr = lv_scr_act();
+    scr_main = scr;
     lv_obj_set_style_bg_color(scr, CLR_BG, 0);
     lv_obj_set_style_bg_opa(scr, LV_OPA_COVER, 0);
 
@@ -510,6 +680,8 @@ void ui_init(void) {
     lv_obj_set_style_text_align(lbl_nosignal, LV_TEXT_ALIGN_CENTER, 0);
     lv_label_set_long_mode(lbl_nosignal, LV_LABEL_LONG_DOT);
     lv_obj_align(lbl_nosignal, LV_ALIGN_BOTTOM_MID, 0, -8);
+
+    procs_init();
 }
 
 void ui_update(const SysData *d) {
@@ -518,6 +690,9 @@ void ui_update(const SysData *d) {
     lv_obj_set_style_text_color(lbl_nosignal, CLR_TEXT, 0);
     lv_obj_set_style_text_font(lbl_nosignal, &lv_font_montserrat_12, 0);
     lv_label_set_text(lbl_nosignal, d->os_kernel[0] ? d->os_kernel : "PC connecté");
+    lv_label_set_text(lbl_procs_status, "");
+    lv_label_set_text_fmt(lbl_procs_cpu, "CPU %d%%", (int)(d->cpu_pct + 0.5f));
+    lv_obj_set_style_text_color(lbl_procs_cpu, pct_color(d->cpu_pct), 0);
 
     // Ligne partagée : mises à jour dispo en priorité, sinon santé/temp/capa SSD2.
     if (d->updates_count > 0) {
@@ -686,4 +861,10 @@ void ui_show_no_signal(void) {
     lv_label_set_text(lbl_ssd2_cap, "");
     set_battery(lbl_kbd_name,   lbl_kbd_icon,   lbl_kbd_pct,   "", 255, 0);
     set_battery(lbl_mouse_name, lbl_mouse_icon, lbl_mouse_pct, "", 255, 0);
+
+    ProcData empty = {};
+    ui_update_procs(&empty);
+    lv_label_set_text(lbl_procs_status, "En attente du PC...");
+    lv_label_set_text(lbl_procs_cpu, "--%");
+    lv_obj_set_style_text_color(lbl_procs_cpu, CLR_GRAY, 0);
 }

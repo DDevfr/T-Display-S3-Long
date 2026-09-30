@@ -5,9 +5,11 @@ monitor_sender.py — Envoie les métriques système au T-Display-S3-Long (ESP32
 Métriques envoyées :
   CPU global, température CPU (k10temp/Tctl), usage GPU (Radeon 780M),
   température GPU (amdgpu/edge), RAM %, 16 threads CPU individuels.
+  + top 12 processus et leurs icônes pour l'écran 2 (voir proc_top.py).
 
 Dépendances :
     pip install psutil pyserial
+    Pillow (python3-pil) pour les icônes de l'écran 2 — optionnel
 
 Usage :
     python monitor_sender.py                      # auto-détecte /dev/ttyACM*
@@ -42,9 +44,11 @@ try:
 except ImportError:
     sys.exit("Installez pyserial :  pip install pyserial")
 
+from proc_top import ProcTop
 
-# Limite matérielle HWCDC : buffer SW ESP32 = 512 octets (setRxBufferSize(512)),
-# buf[] serial_parser = 512 octets. On garde 2 octets de marge (\0 + sécurité).
+
+# Limite d'une ligne : buf[] de serial_parser = 512 octets (le buffer RX HWCDC,
+# lui, fait 4096 octets). On garde 2 octets de marge (\0 + sécurité).
 _SERIAL_MAX = 510
 
 # ── Chemins sysfs détectés au démarrage ───────────────────────────────────────
@@ -880,6 +884,47 @@ def preflight_check(port: str) -> None:
 # ── Boucle principale ─────────────────────────────────────────────────────────
 
 _DISPLAY_POLL_INTERVAL = 1.0   # s entre deux lectures de PowerSaveMode
+_PROCS_INTERVAL = 1.0     # s entre deux trames P: (top processus, écran 2)
+_PROCS_OFFSET   = 0.125   # s de décalage de P: par rapport à la trame principale
+_ICON_INTERVAL  = 0.1     # s minimum entre deux icônes (8 lignes I:, ~2,9 Ko)
+_OUT_MAX        = 1024    # o en attente au-delà desquels une trame d'écran est sautée
+
+
+def _flush(fd: int, out: bytearray) -> None:
+    """Écrit ce que le FIFO HWCDC accepte ; le reste attend le tour suivant
+    (une écriture partielle ne coupe donc jamais une ligne)."""
+    if not out:
+        return
+    try:
+        n = os.write(fd, out)
+    except BlockingIOError:
+        return
+    except OSError as exc:
+        raise serial.SerialException(str(exc))
+    del out[:n]
+
+
+def _read_icon_requests(fd: int, rx: bytearray) -> list[int]:
+    """Hashs des demandes d'icônes « ?I:<hash> » envoyées par l'ESP32."""
+    try:
+        rx += os.read(fd, 1024)
+    except BlockingIOError:
+        return []
+    except OSError as exc:
+        raise serial.SerialException(str(exc))
+    if len(rx) > 4096:          # pas de \n depuis longtemps : ce n'est pas une demande
+        del rx[:-64]
+    reqs = []
+    while b"\n" in rx:
+        line, _, rest = rx.partition(b"\n")
+        rx[:] = rest
+        line = line.strip()
+        if line.startswith(b"?I:"):
+            try:
+                reqs.append(int(line[3:11], 16))
+            except ValueError:
+                pass
+    return reqs
 
 
 def run(port: str, baud: int, interval: float, sleep_delay: float) -> None:
@@ -892,6 +937,8 @@ def run(port: str, baud: int, interval: float, sleep_delay: float) -> None:
     display_off_since = None
     screen_on         = 1
     next_display_poll = 0.0
+
+    procs = ProcTop()   # index .desktop + thread des icônes, gardés entre reconnexions
 
     while True:
         try:
@@ -943,11 +990,17 @@ def run(port: str, baud: int, interval: float, sleep_delay: float) -> None:
 
             print(f"Connecté — envoi toutes les {interval:.2f}s  (Ctrl+C pour arrêter)\n",
                   flush=True)
-            next_send = time.monotonic()
+            next_send  = time.monotonic()
+            next_procs = next_send + _PROCS_OFFSET
+            next_icon  = 0.0
+            out_buf    = bytearray()   # tampon de sortie unique (toutes les trames)
+            rx_buf     = bytearray()
+            icon_queue: list[int] = []
 
             try:
                 while True:
                     now = time.monotonic()
+                    frame_queued = False
                     if sleep_delay > 0 and now >= next_display_poll:
                         next_display_poll = now + _DISPLAY_POLL_INTERVAL
                         if get_display_off():
@@ -965,25 +1018,45 @@ def run(port: str, baud: int, interval: float, sleep_delay: float) -> None:
                             print(f"Écran ESP32 → {'réveil' if screen_on else 'veille'}",
                                   flush=True)
                             next_send = now   # transmettre le changement sans attendre
-                    if now >= next_send:
+                    # Une seule trame d'écran par tour ; si les deux sont dues (boucle
+                    # ralentie par collect()), la plus en retard passe d'abord : la
+                    # trame P: ne peut pas être affamée par la trame principale.
+                    procs_due = now >= next_procs
+                    if now >= next_send and not (procs_due and next_procs < next_send):
                         data       = collect()
                         data["screen_on"] = screen_on
                         line_bytes = (format_line(data) + "\n").encode("ascii")
                         if len(line_bytes) > _SERIAL_MAX:
                             print(f"[WARN] Ligne {len(line_bytes)}B > {_SERIAL_MAX} — tronquée", flush=True)
                             line_bytes = line_bytes[:_SERIAL_MAX - 1] + b"\n"
-                        try:
-                            os.write(fd, line_bytes)
+                        # ESP32 qui ne lit plus : on saute la trame plutôt que d'empiler
+                        # des données périmées (la suivante arrive dans 0,25 s)
+                        if len(out_buf) < _OUT_MAX:
+                            out_buf += line_bytes
                             if _send_count < 5:
                                 print_dashboard(data)
                             elif _send_count == 5:
                                 print_dashboard(data)
                                 print("(affichage arrêté — envoi continu en arrière-plan)", flush=True)
-                        except BlockingIOError:
-                            pass   # HWCDC FIFO plein, on réessaie au prochain tour
-                        except OSError as exc:
-                            raise serial.SerialException(str(exc))
-                        next_send = now + interval
+                        next_send    = now + interval
+                        frame_queued = True
+                    elif procs_due:
+                        if len(out_buf) < _OUT_MAX:
+                            out_buf += (procs.procs_line() + "\n").encode("ascii")
+                        next_procs  += _PROCS_INTERVAL
+                        if next_procs <= now:   # retard (démarrage lent) : on se recale
+                            next_procs = now + _PROCS_INTERVAL
+                        frame_queued = True
+
+                    for h in _read_icon_requests(fd, rx_buf):
+                        if h not in icon_queue and procs.icons.blob(h) is not None:
+                            icon_queue.append(h)
+                    # Icônes : seulement quand aucune trame d'écran n'attend
+                    if icon_queue and not frame_queued and not out_buf and now >= next_icon:
+                        out_buf  += b"".join(procs.icon_lines(icon_queue.pop(0)))
+                        next_icon = now + _ICON_INTERVAL
+
+                    _flush(fd, out_buf)
                     time.sleep(0.01)
             finally:
                 ser.close()
