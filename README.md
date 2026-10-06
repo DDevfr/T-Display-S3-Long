@@ -2,19 +2,63 @@
 
 Moniteur système graphique pour NUC AMD (Ryzen 9 7940HS + Radeon 780M) affiché sur un écran T-Display-S3-Long (ESP32-S3, 180×640 px portrait).
 
-Les métriques sont envoyées du NUC vers l'ESP32 via USB-Serial (CSV) par le script Python `tools/monitor_sender.py`. Un second écran, affiché avec le bouton BOOT, montre le top 12 des processus avec l'icône de leur appli (voir [Écran 2 — Top processus](#écran-2--top-processus)).
+Les métriques sont envoyées du NUC vers l'ESP32 via USB-Serial (CSV) par le script Python `tools/monitor_sender.py`. Un second écran, affiché d'un toucher ou avec le bouton BOOT, montre le top 12 des processus avec l'icône de leur appli (voir [Écran 2 — Top processus](#écran-2--top-processus)).
 
 ---
 
-## Matériel
+## Hardware
 
-| Composant | Détail |
-|-----------|--------|
-| Afficheur | LILYGO T-Display-S3-Long |
-| SOC | ESP32-S3R8 (240 MHz) |
-| Flash / PSRAM | 16 MB / 8 MB OPI |
-| Résolution | 180×640 px |
-| Connexion NUC | USB-JTAG / CDC (`/dev/ttyACM0`) |
+### Carte
+
+| Élément | Détail |
+|---------|--------|
+| Carte | LILYGO T-Display-S3-Long, révision datée du **20-06-2026** (tactile CST3530) |
+| SoC | ESP32-S3R8 : double cœur Xtensa LX7 à 240 MHz, 512 Ko de SRAM, Wi-Fi 2,4 GHz et Bluetooth LE |
+| PSRAM | 8 Mo OPI, intégrée au boîtier (le « R8 » de ESP32-S3R8) |
+| Flash | 16 Mo QIO à 80 MHz, partitionnée en `huge_app.csv` (3 Mo d'application) |
+| Écran | 180×640 px, contrôleur **AXS15231B** en QSPI à 32 MHz, rétroéclairage PWM |
+| Tactile | **CST3530** (Hynitron), I2C, puce séparée de l'écran |
+| Charge batterie | **BQ25896** (Texas Instruments), I2C `0x6A` |
+| USB | Type-C, USB-Serial-JTAG natif de l'ESP32-S3 (VID:PID `303A:1001`), vu en `/dev/ttyACM0` |
+| Boutons | BOOT (GPIO0, utilisé comme bascule d'écran) et RST |
+
+### Brochage utilisé (`pins_config.h`)
+
+| Fonction | GPIO |
+|----------|------|
+| Écran QSPI : CS / SCK | 12 / 17 |
+| Écran QSPI : D0 / D1 / D2 / D3 | 13 / 18 / 21 / 14 |
+| Écran : reset | 16 |
+| Rétroéclairage (LEDC canal 0, 5 kHz) | 1 |
+| I2C (tactile + BQ25896) : SDA / SCL | 15 / 10 |
+| Tactile : INT / reset | 11 / 2 |
+| Bouton BOOT | 0 |
+
+### Révisions du tactile
+
+LilyGo a changé de contrôleur tactile en cours de production, sans changer le nom de la carte. Le code de la nouvelle révision a été publié le 19-05-2026 :
+
+| Révision | Contrôleur tactile | Adresse I2C | Reset tactile | Code LilyGo |
+|----------|--------------------|-------------|---------------|-------------|
+| Ancienne révision | Intégré à l'AXS15231B | `0x3B` | GPIO16 (partagé avec l'écran) | branche `master`, exemple `touch` |
+| Révision CST3530 (cette carte) | **CST3530** séparé | `0x58` (`0x5A` en bootloader) | **GPIO2** | branche `T-Display-S3-Long-cst3530`, exemple `cst3530_touch` |
+
+Ce projet ne gère que la révision CST3530. Les exemples LilyGo d'origine (`touch`, `factory`, `GFX_AXS15231B_Image`…) encore présents dans `examples/` visent l'ancienne révision : leur tactile ne répond pas sur cette carte, et le firmware `factory` d'origine reste bloqué (le bon pour cette carte est `factory-cst3530.bin`, dans la branche LilyGo `T-Display-S3-Long-cst3530`).
+
+La CST3530 de cette carte s'identifie ainsi au démarrage (messages `[HYN]` du pilote sur le port série) : `ictype:caca220e`, `fw_project_id:2601093`, firmware de la puce `fw_ver:1010001`.
+
+Elle est pilotée par le pilote Hynitron fourni par LilyGo (`lib/hyn_driver_for_esp32`), avec **`HYN_POWER_ON_UPDATA = 0`** dans `hyn_cfg.h`. Le pilote ne reprogramme donc jamais le firmware interne de la puce tactile : l'original ne peut pas être sauvegardé, et une mise à jour serait irréversible. Ne passer cette valeur à `1` qu'en connaissance de cause.
+
+### Environnement de build testé
+
+| Élément | Version |
+|---------|---------|
+| Plateforme PlatformIO | `espressif32` 7.0.1 (non figée dans `platformio.ini`) |
+| Framework | Arduino-ESP32 2.0.17 (ESP-IDF 4.4) |
+| LVGL | 8.3.0-dev, fournie dans `lib/lvgl` |
+| Pilote tactile | Hynitron V2.10 (20241111), fourni dans `lib/hyn_driver_for_esp32` |
+
+Le pilote Hynitron est écrit pour ESP-IDF 4.4 (ancien driver I2C, types FreeRTOS d'avant IDF 5) : passer à Arduino-ESP32 3.x demanderait de l'adapter. Il partage le port I2C 0 déjà installé par `Wire`, d'où le message `E (799) i2c: i2c driver install error` au démarrage, sans conséquence.
 
 ---
 
@@ -57,6 +101,7 @@ Les métriques sont envoyées du NUC vers l'ESP32 via USB-Serial (CSV) par le sc
 - VPN : actif → vert · inactif → gris
 - % CPU et GPU : affichés en bleu (`CLR_GPU`)
 - Numéros de cœurs : colorés selon leur activité (même couleur que la barre, > 5 %)
+- Santé SMART SSD : ≥ 90 % → vert · ≥ 70 % → orange · < 70 % → rouge
 
 ---
 
@@ -68,8 +113,9 @@ examples/sys_monitor/
 ├── ui.h / ui.cpp       # Interface LVGL (init + update, écran 2 top processus)
 ├── serial_parser.h     # Parser non-bloquant (trames CPU:, P:, I:)
 ├── icon_cache.h / .cpp # Cache PSRAM des icônes d'applis (écran 2)
+├── touch_cst3530.h / .c # Enveloppe du pilote tactile Hynitron (CST3530)
 ├── AXS15231B.h / .cpp  # Driver écran QSPI (DMA, veille lcd_sleep/lcd_wake)
-└── pins_config.h       # Brochage et résolution
+└── pins_config.h       # Brochage (écran, tactile, BOOT) et résolution
 
 tools/
 ├── monitor_sender.py       # Script Python NUC → ESP32
@@ -80,8 +126,12 @@ tools/
 └── deploy.sh               # Déploiement complet : arrêt → flash → redémarrage service
 
 lib/
-└── lv_conf.h           # Config LVGL (fonts activés)
+├── lv_conf.h              # Config LVGL (fonts activés)
+├── lvgl/                  # LVGL 8.3
+└── hyn_driver_for_esp32/  # Pilote tactile Hynitron/LilyGo (HYN_POWER_ON_UPDATA = 0)
 ```
+
+Les autres dossiers de `examples/` et de `lib/` (`Arduino_GFX`, `Arduino_DriveBus`, `XPowersLib`) viennent du dépôt LilyGo d'origine et ne servent pas à `sys_monitor`.
 
 ---
 
@@ -128,7 +178,7 @@ CX:55;12;8;6;4;3;2;1;78;45;12;8;5;3;2;1
 | `KCHG` / `MCHG` | `1` = périphérique en charge → icône éclair à la place de la pile |
 | `CX` | 16 valeurs % par cœur séparées par `;` (ex: `CX:55;12;8;...;1`) |
 
-> **Note SSD2** : les débits SSD2 (`S2RD`/`S2WR`) ne sont plus envoyés — le pont USB-SATA ASMedia ASM235C (driver `uas`) ne remonte pas les lectures dans `/proc/diskstats`. Le firmware sait encore les parser (compatibilité) mais ne les affiche pas. SSD2 n'apparaît qu'à travers `S2HLTH`/`S2TMP`/`S2CAP`/`S2TOT`, sur la ligne partagée avec les mises à jour.
+> **Note SSD2** : les débits SSD2 (`S2RD`/`S2WR`) ne sont plus envoyés — le pont USB-SATA ASMedia ASM235C (driver `uas`) ne remonte pas les lectures dans `/proc/diskstats`. Le firmware ne les lit plus. SSD2 n'apparaît qu'à travers `S2HLTH`/`S2TMP`/`S2CAP`/`S2TOT`, sur la ligne partagée avec les mises à jour.
 
 ---
 
@@ -226,7 +276,7 @@ sudo journalctl -u nuc-monitor -f      # logs en direct
 
 ## Écran 2 — Top processus
 
-Un appui sur le **bouton BOOT** (GPIO0) bascule de l'écran principal vers le top 12 des processus ; un nouvel appui revient à l'écran principal (pas de retour automatique). Le toucher fait la même chose, mais le contrôleur tactile de la carte actuelle ne répond pas (voir « Tactile » ci-dessous). Appuyer sur BOOT pendant le fonctionnement ne fait que changer d'écran : il ne fait passer l'ESP32 en mode flash que s'il est maintenu pendant un appui sur RST. Chaque ligne : icône de l'appli (la même que dans le moniteur système GNOME) + nom du processus + %CPU façon `top` (100 % = un thread saturé, jusqu'à 1600 % sur les 16 threads), avec une barre de 4 px et la couleur `pct_color()`. Le titre rappelle le CPU global.
+Un **toucher de l'écran** ou un appui sur le **bouton BOOT** (GPIO0) bascule de l'écran principal vers le top 12 des processus ; un nouveau toucher ou appui revient à l'écran principal (pas de retour automatique). Appuyer sur BOOT pendant le fonctionnement ne fait que changer d'écran : il ne fait passer l'ESP32 en mode flash que s'il est maintenu pendant un appui sur RST. Chaque ligne : icône de l'appli (la même que dans le moniteur système GNOME) + nom du processus + %CPU façon `top` (100 % = un thread saturé, jusqu'à 1600 % sur les 16 threads), avec une barre de 4 px et la couleur `pct_color()`. Le titre rappelle le CPU global.
 
 ```
 ┌──────────────────────────────────────┐
@@ -243,7 +293,7 @@ Un appui sur le **bouton BOOT** (GPIO0) bascule de l'écran principal vers le to
 ### Échanges PC ↔ ESP32
 
 - **Le Python produit les données** : il ne sait pas quel écran est affiché et envoie le top processus en permanence.
-- **L'ESP32 affiche et bascule localement** : le bouton BOOT (ou le toucher) ne passe pas par le PC (bascule instantanée, écran 2 déjà à jour).
+- **L'ESP32 affiche et bascule localement** : le toucher (ou le bouton BOOT) ne passe pas par le PC (bascule instantanée, écran 2 déjà à jour).
 - **Seul cas où l'ESP32 parle au PC** : il demande une icône qui lui manque.
 
 ```
@@ -265,7 +315,7 @@ Un appui sur le **bouton BOOT** (GPIO0) bascule de l'écran principal vers le to
  │  (max 1 icône / 100 ms) │                                         vérif hash → affichée
  └─────────▲───────────────┘
  ┌─ Thread séparé ─────────┐                                    ┌─────────────────┐
- │  processus → appli      │                                    │ BOUTON BOOT     │
+ │  processus → appli      │                                    │ TOUCHER / BOOT  │
  │  → icône du thème       │                                    │ écran 1 ⇄ 2     │
  │  → 32×32 → hash (cache) │                                    │ (sans le PC)    │
  └─────────────────────────┘                                    └─────────────────┘
@@ -297,7 +347,7 @@ Un appui sur le **bouton BOOT** (GPIO0) bascule de l'écran principal vers le to
 - Recherche et rendu tournent dans un thread séparé : tant qu'une icône n'est pas prête, le hash envoyé est `0` et l'ESP32 affiche la pastille. Les rendus sont mis en cache dans `~/.cache/nuc-monitor/icons/` (clé = chemin + date de modification de l'image). Aucune commande externe n'est lancée.
 - Sans Pillow, les trames `P:` sont envoyées sans icônes (pastilles uniquement).
 
-**Tactile** : sur la carte actuelle, le contrôleur tactile de l'AXS15231B ne répond pas à son adresse `0x3B`. Il reste en mode bootloader : il répond en `0x58` et renvoie des octets de firmware. Le firmware `factory` de LilyGo reste lui aussi bloqué (écran noir), et une coupure d'alimentation n'y change rien : le problème vient de la carte. La bascule passe donc par le bouton BOOT, avec un anti-rebond de 30 ms. Le code du tactile reste en place : il suit l'ordre de démarrage des exemples LilyGo, sonde `0x3B` toutes les 2 s et n'accepte que des réponses plausibles (1 ou 2 doigts, coordonnées dans l'écran). Il prendra le relais si le contrôleur se remet à répondre.
+**Tactile et bouton** : la puce CST3530 est décrite dans [Hardware](#hardware). Le pilote lit les points dans sa propre tâche, sur interruption (GPIO11). `touch_cst3530.c` l'enveloppe, parce que son en-tête redéfinit `bool`, `NULL`, `HIGH`… et ne doit pas être inclus dans le `.ino`. Un doigt n'est considéré comme posé que si une interruption est arrivée dans les 200 dernières ms, pour qu'un rapport de levée perdu ne laisse pas un appui « collé ». Une bascule demande que le doigt ait été levé au moins 150 ms, et 400 ms d'écart avec la bascule précédente. Le bouton BOOT a un anti-rebond de 30 ms. Aucun des deux écrans ne défile : sinon un glissé du doigt déplacerait tout le contenu hors de l'écran (écran noir). Au démarrage, le pilote écrit ses messages `[HYN]` sur le port série avec `printf`, et le script PC les ignore.
 
 **Côté ESP32** : `icon_cache.cpp` garde 48 icônes en PSRAM (~96 Ko, éviction LRU) ; `loop()` traite jusqu'à 16 lignes par tour pour absorber les 8 lignes d'une icône.
 
@@ -335,7 +385,7 @@ Les trames `CPU:` (0,25 s), `P:` (1 s) et `I:` (à la demande) ne se gênent pas
 - **Rétroéclairage PWM** : backlight sur `TFT_BL` (GPIO 1) via LEDC, canal 0, 5 kHz, 8-bit. `BL_BRIGHTNESS = 153` ≈ 60 % dans `sys_monitor.ino` — modifier cette valeur pour ajuster la luminosité (0–255).
 - **Gauge SSD1** : barre unique affichant `R+W` cumulés en KB/s, centrée entre les labels `R - W` et le débit affiché à droite. Échelle : 20 000 KB/s (≈ 20 MB/s) = 100 %. Affichage dynamique : `KB/s` sous 10 240 KB/s, `MB/s` au-dessus. Les indicateurs R et W s'allument en vert au-dessus de 512 KB/s.
 - **Santé SMART SSD1** : lue via l'interface D-Bus `org.freedesktop.UDisks2.NVMe.Controller` (méthode `SmartGetAttributes`, propriété `percent_used`), exposée par le service `UDisks2` déjà actif sur le système — **aucun droit root requis** (contrairement à `smartctl`/`nvme-cli` classiques, qui nécessitent un accès direct au device `/dev/nvme0`). Uniquement disponible pour le disque NVMe (SSD1) ; le module Python `dbus` (paquet système `python3-dbus`, déjà présent) est optionnel — son absence désactive juste la fonctionnalité. La lecture D-Bus est throttlée à 1×/60 s côté script (`_SSD_HEALTH_INTERVAL`), la santé SMART ne variant pas assez vite pour justifier un appel à chaque cycle de 0.25 s.
-- **Santé + température SSD2** : SSD2 (Crucial CT2000MX500SSD1, pont USB-SATA ASMedia ASM235C) n'a pas d'attribut SMART standardisé de type "% d'usure" comme le NVMe (les attributs ATA propriétaires varient par fabricant) — lu à la place via l'interface `org.freedesktop.UDisks2.Drive.Ata` (ATA passthrough/SAT à travers le pont USB, toujours sans root). Statut de santé basé sur `SmartFailing` (agrégat officiel, équivalent `smartctl -H`), `SmartNumAttributesFailing` et `SmartNumBadSectors` : affiché en valeurs symboliques `100 %` (sain, vert) / `20 %` (WARN, rouge) plutôt qu'un vrai pourcentage mesuré, pour rester visuellement cohérent avec la jauge SSD1 sans donner une fausse précision. La température (`SmartTemperature`, absente de tout sysfs hwmon pour ce pont USB) est lue sur la même interface. Contrairement au NVMe, UDisks2 ne rafraîchit pas ces valeurs en continu (`SmartUpdated` peut dater de plus d'une heure) : le script appelle explicitement `SmartUpdate()` avant chaque lecture throttlée à 60 s (`_refresh_ssd2_smart()`), pour éviter d'afficher une valeur figée.
+- **Santé + température SSD2** : SSD2 (Crucial CT2000MX500SSD1, pont USB-SATA ASMedia ASM235C) n'a pas d'attribut SMART standardisé de type "% d'usure" comme le NVMe (les attributs ATA propriétaires varient par fabricant) — lu à la place via l'interface `org.freedesktop.UDisks2.Drive.Ata` (ATA passthrough/SAT à travers le pont USB, toujours sans root). Statut de santé basé sur `SmartFailing` (agrégat officiel, équivalent `smartctl -H`), `SmartNumAttributesFailing` et `SmartNumBadSectors` : affiché en valeurs symboliques `100 %` (sain, vert) / `20 %` (WARN, rouge) plutôt qu'un vrai pourcentage mesuré, pour rester visuellement cohérent avec la jauge SSD1 sans donner une fausse précision. La température (`SmartTemperature`, absente de tout sysfs hwmon pour ce pont USB) est lue sur la même interface. Le script lit les valeurs déjà en cache dans UDisks2, toutes les 60 s (`_refresh_ssd2_smart()`). Il n'appelle pas `SmartUpdate()` : cette méthode demande une autorisation polkit liée à une session active, refusée (`NotAuthorizedCanObtain`) pour un service systemd sans session. UDisks2 rafraîchit ces valeurs tout seul, avec quelques minutes de retard au plus, ce qui suffit pour un indicateur qui varie lentement.
 - **Pas de débit SSD2** : le pont USB-SATA ASMedia ASM235C (driver `uas`, `/dev/sdc`) ne met pas à jour `/proc/diskstats` pour les lectures — seules les écritures fsync'd sont comptabilisées avec délai. La gauge SSD2 a été supprimée et `S2RD`/`S2WR` ne sont plus transmis ; seuls santé, température et capacité SSD2 sont affichés (ligne partagée avec les mises à jour, visible quand `UPD == 0`).
 - **Détection SSD** : `_detect_ssd_devices()` filtre les périphériques avec `taille ≥ 1 GB` pour exclure les gadgets USB 0-octet (sda/sdb exposés par l'ESP32 en mass-storage). Le NVMe est toujours sélectionné en premier.
 - **Intervalle polling Python** : 0.25 s par défaut dans `monitor_sender.py`. Configurable via `--interval`.
@@ -375,6 +425,9 @@ sudo systemctl status nuc-monitor
 **L'écran 2 reste vide ou les icônes restent des pastilles**
 → Écran 2 vide : le script Python ne transmet plus de trame `P:` depuis 5 s (ancienne version du script, ou script arrêté) ; relancer `bash tools/deploy.sh --no-flash`. Pastilles permanentes : Pillow est absent (`sudo apt install python3-pil`), ou l'appli n'a pas d'icône trouvable ; la pastille est alors le comportement normal. Les icônes déjà rendues sont dans `~/.cache/nuc-monitor/icons/`, et ce dossier peut être supprimé sans risque.
 
+**Le tactile ne répond pas (le bouton BOOT, lui, fonctionne)**
+→ Regarder les messages `[HYN]` envoyés au démarrage : arrêter le service (`sudo bash tools/dev-mode.sh`), ouvrir le port série (`~/.platformio/penv/bin/pio device monitor`) et appuyer sur RST. Une ligne `IC_info ... ictype:caca220e` confirme que la CST3530 répond. Sans elle, la carte est peut-être de l'ancienne révision (tactile intégré à l'AXS15231B en `0x3B`, voir [Hardware](#hardware)), que ce firmware ne gère pas. Ne pas activer `HYN_POWER_ON_UPDATA` pour « réparer » la puce : la mise à jour de son firmware est irréversible.
+
 **Le service systemd ne démarre pas**
 → `sudo journalctl -u nuc-monitor -f` pour voir les erreurs. Vérifier que l'ESP32 est branché ou laisser le service : il reconnecte automatiquement.
 
@@ -383,6 +436,6 @@ sudo systemctl status nuc-monitor
 ## Bibliothèques
 
 - [LVGL 8.3.0](https://github.com/lvgl/lvgl) — ne pas mettre à jour (rotation logicielle forcée)
-- [XPowersLib](https://github.com/lewisxhe/XPowersLib)
+- Pilote tactile Hynitron V2.10, fourni par LilyGo ([branche `T-Display-S3-Long-cst3530`](https://github.com/Xinyuan-LilyGO/T-Display-S3-Long/tree/T-Display-S3-Long-cst3530)) — `HYN_POWER_ON_UPDATA` laissé à `0`
 - psutil, pyserial (Python)
 - Pillow, PyGObject / GdkPixbuf (Python, optionnels : icônes de l'écran 2)

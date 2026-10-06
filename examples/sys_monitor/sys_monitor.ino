@@ -3,6 +3,7 @@
 #include "ui.h"
 #include "serial_parser.h"
 #include "icon_cache.h"
+#include "touch_cst3530.h"
 #include <Arduino.h>
 #include <Wire.h>
 
@@ -12,52 +13,13 @@ static lv_color_t *buf;
 static lv_color_t *buf1;
 
 // ── Touch ─────────────────────────────────────────────────────────────────────
-#define TOUCH_IICSCL 10
-#define TOUCH_IICSDA 15
-#define TOUCH_RES    16
-#define TOUCH_INT    11
-
-#define AXS_TOUCH_ONE_POINT_LEN  6
-#define AXS_TOUCH_POINT_NUM      1
-#define AXS_TOUCH_X_H_POS        2
-#define AXS_TOUCH_X_L_POS        3
-#define AXS_TOUCH_Y_H_POS        4
-#define AXS_TOUCH_Y_L_POS        5
-
-#define AXS_GET_POINT_NUM(b)    b[AXS_TOUCH_POINT_NUM]
-#define AXS_GET_POINT_X(b,i) \
-    (((uint16_t)(b[AXS_TOUCH_ONE_POINT_LEN*(i)+AXS_TOUCH_X_H_POS] & 0x0F) << 8) \
-     + (uint16_t)b[AXS_TOUCH_ONE_POINT_LEN*(i)+AXS_TOUCH_X_L_POS])
-#define AXS_GET_POINT_Y(b,i) \
-    (((uint16_t)(b[AXS_TOUCH_ONE_POINT_LEN*(i)+AXS_TOUCH_Y_H_POS] & 0x0F) << 8) \
-     + (uint16_t)b[AXS_TOUCH_ONE_POINT_LEN*(i)+AXS_TOUCH_Y_L_POS])
-
-static uint8_t touch_cmd[8] = {0xb5, 0xab, 0xa5, 0x5a, 0x00, 0x00, 0x00, 0x08};
-
-// Adresse I2C du tactile : 0x3B (LilyGo). Sur la carte actuelle, le contrôleur
-// reste en mode bootloader (répond en 0x58, même avec le firmware factory) : le
-// tactile est inutilisable et la bascule d'écran passe par le bouton BOOT. Il est
-// sondé toutes les 2 s et reprend la main s'il se met à répondre en 0x3B.
-#define TOUCH_ADDR       0x3B
-static uint8_t touch_addr = 0;   // 0 = pas encore trouvé
-
-static bool i2c_ack(uint8_t addr) {
-    Wire.beginTransmission(addr);
-    return Wire.endTransmission() == 0;
-}
-
-static void touch_probe(void) {
-    static uint32_t last_ms = 0;
-    uint32_t now = millis();
-    if (last_ms != 0 && now - last_ms < 2000) return;
-    last_ms = now ? now : 1;
-    if (i2c_ack(TOUCH_ADDR))
-        touch_addr = TOUCH_ADDR;
-}
+// Tactile CST3530 (adresse I2C 0x58, broches dans pins_config.h). Les anciennes
+// cartes utilisaient le tactile intégré à l'AXS15231B (0x3B, reset GPIO16
+// partagé avec l'écran) : ce code ne les gère plus.
 
 // Bascule écran 1 ⇄ 2 : un nouvel appui compte si le doigt a été levé au moins
-// TOUCH_RELEASE_MS (l'AXS15231B peut relâcher INT entre deux rapports pendant
-// un appui long) et au moins TOUCH_DEBOUNCE_MS après la bascule précédente.
+// TOUCH_RELEASE_MS (tolère un rapport manqué pendant un appui long) et au
+// moins TOUCH_DEBOUNCE_MS après la bascule précédente.
 #define TOUCH_RELEASE_MS  150
 #define TOUCH_DEBOUNCE_MS 400
 static volatile bool page_toggle = false;   // posé par le toucher ou le bouton BOOT
@@ -95,72 +57,19 @@ void my_disp_flush(lv_disp_drv_t *disp, const lv_area_t *area,
                    lv_color_t *color_p) {
     uint32_t w = area->x2 - area->x1 + 1;
     uint32_t h = area->y2 - area->y1 + 1;
-#ifdef LCD_SPI_DMA
-    char dummy = 0;
-    while (get_lcd_spi_dma_write()) {
-        dummy >>= 1;
+    // Termine l'envoi DMA précédent ; lv_disp_flush_ready() est appelé par le
+    // callback DMA (spi_dma_cd) à la fin de celui-ci.
+    while (get_lcd_spi_dma_write())
         lcd_PushColors(0, 0, 0, 0, NULL);
-    }
-    (void)dummy;
-#endif
     lcd_PushColors(area->x1, area->y1, w, h, (uint16_t *)&color_p->full);
-#ifndef LCD_SPI_DMA
-    lv_disp_flush_ready(disp);
-#endif
 }
 
 void my_touchpad_read(lv_indev_drv_t *indev_driver, lv_indev_data_t *data) {
-    // Pas de filtrage sur TOUCH_INT : l'AXS15231B ne tient pas INT bas pendant
-    // l'appui (impulsion brève, ratée par une lecture toutes les 16 ms). On
-    // interroge le contrôleur à chaque lecture, comme les exemples LilyGo
-    // (~1,6 ms à 100 kHz).
-    uint8_t tbuf[8] = {0};
-    if (touch_addr == 0) {
-        touch_probe();
-        if (touch_addr == 0) {
-            data->state = LV_INDEV_STATE_REL;
-            return;
-        }
-    }
-    Wire.beginTransmission(touch_addr);
-    Wire.write(touch_cmd, 8);
-    uint8_t err = Wire.endTransmission();
-    if (err != 0) {   // contrôleur absent / NACK
-        static uint8_t nack_run = 0;
-        if (++nack_run >= 60) {   // ~1 s de NACK : on resonde le contrôleur
-            nack_run   = 0;
-            touch_addr = 0;
-        }
-        data->state = LV_INDEV_STATE_REL;
-        return;
-    }
-    int nBytes = Wire.requestFrom(touch_addr, (uint8_t)8);
-    if (nBytes <= 0) {
-        data->state = LV_INDEV_STATE_REL;
-        return;
-    }
-    // Timeout 5ms pour éviter de bloquer si l'I2C est lent
-    uint32_t t0 = millis();
-    while (!Wire.available() && (millis() - t0 < 5));
-    if (!Wire.available()) {
-        data->state = LV_INDEV_STATE_REL;
-        return;
-    }
-    Wire.readBytes(tbuf, 8);
-
-    // Note LilyGo (T-Display-S3-Long_AXS15231B_Touch_Register.pdf) :
-    // octet 0 = NULL, octet 1 = nombre de doigts, octets 2-5 = coordonnées.
-    uint16_t px = AXS_GET_POINT_X(tbuf, 0);
-    uint16_t py = AXS_GET_POINT_Y(tbuf, 0);
-    uint8_t  fingers = AXS_GET_POINT_NUM(tbuf);
-
-    // Réponse plausible uniquement : 1-2 doigts, coordonnées dans l'écran.
-    // Des octets aléatoires ne doivent pas simuler un appui permanent.
-    if (fingers >= 1 && fingers <= 2 && (px || py) && px <= 640 && py <= 180) {
-        px = 640 - px;
+    uint16_t x, y;
+    if (cst3530_read(&x, &y)) {
         data->state   = LV_INDEV_STATE_PR;
-        data->point.x = py;
-        data->point.y = px;
+        data->point.x = x < EXAMPLE_LCD_H_RES ? x : EXAMPLE_LCD_H_RES - 1;
+        data->point.y = y < EXAMPLE_LCD_V_RES ? y : EXAMPLE_LCD_V_RES - 1;
         touch_pressed();
     } else {
         data->state = LV_INDEV_STATE_REL;
@@ -209,14 +118,7 @@ void setup() {
     Serial.begin(115200);   // HWCDC (USB-JTAG) — requis pour serial_read_line()
     Serial.setTxTimeoutMs(0);   // « ?I: » ne doit jamais bloquer si le PC ne lit pas
 
-    // Ordre identique aux exemples LilyGo (touch, lvgl_demo) : reset tactile,
-    // Wire.begin(), puis axs15231_init() qui refait un reset commun (GPIO16) de
-    // l'écran et du tactile. Aucune activité sur SDA/SCL/INT pendant que le
-    // contrôleur tactile démarre : sinon il reste en mode bootloader (répond en
-    // 0x58 avec des octets de firmware au lieu de 0x3B).
-
-    // 9 impulsions SCL pour libérer un esclave I2C bloqué après un soft-reset,
-    // AVANT le reset du tactile (bus au repos quand il démarre)
+    // 9 impulsions SCL pour libérer un esclave I2C bloqué après un soft-reset
     pinMode(TOUCH_IICSCL, OUTPUT);
     pinMode(TOUCH_IICSDA, INPUT_PULLUP);
     for (int i = 0; i < 9; i++) {
@@ -230,11 +132,6 @@ void setup() {
     pinMode(TOUCH_IICSDA, INPUT);
     pinMode(TOUCH_IICSCL, INPUT);
 
-    pinMode(TOUCH_RES, OUTPUT);
-    digitalWrite(TOUCH_RES, HIGH); delay(2);
-    digitalWrite(TOUCH_RES, LOW);  delay(10);
-    digitalWrite(TOUCH_RES, HIGH); delay(2);
-
     Wire.begin(TOUCH_IICSDA, TOUCH_IICSCL);
 
     // Rétroéclairage à 60 % via PWM pour préserver la LED
@@ -242,18 +139,22 @@ void setup() {
     ledcAttachPin(TFT_BL, BL_PWM_CHANNEL);
     ledcWrite(BL_PWM_CHANNEL, BL_BRIGHTNESS);
 
-    axs15231_init();   // se termine par 300 ms d'attente après le reset commun
-    pinMode(TOUCH_INT, INPUT_PULLUP);
+    axs15231_init();   // se termine par 300 ms d'attente après le reset (GPIO16)
     pinMode(PIN_BUTTON_1, INPUT_PULLUP);   // bouton BOOT : bascule écran 1 ⇄ 2
 
     // BQ25896 : stoppe le clignotement de la LED verte sans batterie
-    // (reg 0x09 bit5 = BATFET_DIS) — après le démarrage du tactile
+    // (reg 0x09 bit5 = BATFET_DIS)
     Wire.beginTransmission(0x6A);
     Wire.write(0x00); Wire.write(0x3F);
     Wire.endTransmission();
     Wire.beginTransmission(0x6A);
     Wire.write(0x09); Wire.write(0x64);
     Wire.endTransmission();
+
+    // Même ordre que l'exemple lvgl_demo LilyGo (écran puis tactile). Le pilote
+    // partage le port I2C 0 déjà installé par Wire, reset la puce sur GPIO2 et
+    // arme l'interruption sur INT.
+    cst3530_begin(TOUCH_IICSDA, TOUCH_IICSCL, TOUCH_INT, TOUCH_RES);
 
     lv_init();
 
@@ -283,7 +184,6 @@ void setup() {
 
     icon_cache_init();
     ui_init();
-    touch_probe();
 
     last_data_ms = millis();
     signal_lost  = true;

@@ -16,8 +16,6 @@ struct SysData {
     float ssd_used_gb;
     float ssd_total_gb;
     uint8_t ssd_health;
-    float ssd2_read_mbps;
-    float ssd2_write_mbps;
     float ssd2_temp;
     float ssd2_used_gb;
     float ssd2_total_gb;
@@ -49,8 +47,6 @@ inline bool parse_sysdata(const char *line, SysData *out) {
     out->os_kernel[0] = '\0';
     out->ssd_health   = 255;
     out->ssd2_health  = 255;
-    out->ssd2_read_mbps = 0.0f;
-    out->ssd2_write_mbps = 0.0f;
     out->ssd2_temp = 0.0f;
     out->ssd2_used_gb = 0.0f;
     out->ssd2_total_gb = 0.0f;
@@ -88,8 +84,6 @@ inline bool parse_sysdata(const char *line, SysData *out) {
         else if (strcmp(key, "SCAP") == 0) out->ssd_used_gb    = val;
         else if (strcmp(key, "STOT") == 0) out->ssd_total_gb    = val;
         else if (strcmp(key, "SHLTH")== 0) out->ssd_health      = (uint8_t)val;
-        else if (strcmp(key, "S2RD") == 0) out->ssd2_read_mbps  = val;
-        else if (strcmp(key, "S2WR") == 0) out->ssd2_write_mbps = val;
         else if (strcmp(key, "S2TMP")== 0) out->ssd2_temp       = val;
         else if (strcmp(key, "S2CAP")== 0) out->ssd2_used_gb    = val;
         else if (strcmp(key, "S2TOT")== 0) out->ssd2_total_gb   = val;

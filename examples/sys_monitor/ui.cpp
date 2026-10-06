@@ -10,11 +10,9 @@
 #define CLR_DIM       lv_color_hex(0x2A2A2A)
 #define CLR_GRAY      lv_color_hex(0x888888)   // gris R/W inactif
 #define CLR_WARN      lv_color_hex(0xFF8C00)   // orange
-#define CLR_HOT       lv_color_hex(0xFF2222)   // rouge charge élevée
 
 // ── Layout constants (portrait 180×640) ──────────────────────────────────────
 #define SCR_W   180
-#define SCR_H   640
 
 // Zones Y
 #define Y_HEADER     0
@@ -334,6 +332,7 @@ void ui_refresh_proc_icons(void) {
 void ui_init(void) {
     lv_obj_t *scr = lv_scr_act();
     scr_main = scr;
+    lv_obj_clear_flag(scr, LV_OBJ_FLAG_SCROLLABLE);   // un glissé du doigt ne doit pas déplacer l'écran
     lv_obj_set_style_bg_color(scr, CLR_BG, 0);
     lv_obj_set_style_bg_opa(scr, LV_OPA_COVER, 0);
 

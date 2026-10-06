@@ -1,0 +1,19 @@
+
+#ifndef _HYNITRON_CFG_H
+#define _HYNITRON_CFG_H
+
+/**delay ms */
+#define mdelay(ms)                   hyn_delay_ms(ms)
+#define msleep(ms)                   hyn_delay_ms(ms)   
+
+/**function config */
+// 0 : ne jamais reprogrammer le firmware de la puce tactile (CST3530) au démarrage
+#define HYN_POWER_ON_UPDATA     (0) //touch fw updata
+
+#define MAX_POINTS_REPORT       (5) //max report point  
+
+#define HYN_DRIVER_VERSION      "== Hynitron V2.10 20241111 =="
+#endif
+
+
+
