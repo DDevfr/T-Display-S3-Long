@@ -404,9 +404,12 @@ void ui_init(void) {
     // Fréquence + puissance CPU (entre °C et "CPU")
     lbl_cpu_info = lv_label_create(scr);
     lv_label_set_text(lbl_cpu_info, "-- GHz");
-    lv_obj_set_style_text_color(lbl_cpu_info, lv_color_hex(0x666666), 0);
+    lv_obj_set_style_text_color(lbl_cpu_info, lv_color_hex(0xE0A060), 0);   // orange doux (≠ CLR_WARN des seuils)
     lv_obj_set_style_text_font(lbl_cpu_info, &lv_font_montserrat_10, 0);
     lv_obj_set_style_text_align(lbl_cpu_info, LV_TEXT_ALIGN_CENTER, 0);
+    // Pleine largeur : align_to() ne fixe la position qu'une fois, et le texte
+    // s'allonge (« -- GHz » → « 2.8 GHz  6W ») ; le centrage se fait dans le label.
+    lv_obj_set_width(lbl_cpu_info, SCR_W);
     lv_obj_align_to(lbl_cpu_info, arc_cpu, LV_ALIGN_CENTER, 0, +30);
 
     // "CPU" dans le gap bas de l'arc (zone sans trait, 90° en bas)

@@ -8,7 +8,8 @@ Métriques envoyées :
   + top 12 processus et leurs icônes pour l'écran 2 (voir proc_top.py).
 
 Dépendances :
-    pip install psutil pyserial
+    sudo apt install python3-psutil python3-serial
+    python3-dbus pour le WiFi, la santé SMART, la veille et les piles — optionnel
     Pillow (python3-pil) pour les icônes de l'écran 2 — optionnel
 
 Usage :
@@ -21,6 +22,7 @@ import argparse
 import glob
 import platform
 import re
+import select
 import subprocess
 import time
 import sys
@@ -36,13 +38,13 @@ except ImportError:
 try:
     import psutil
 except ImportError:
-    sys.exit("Installez psutil :  pip install psutil")
+    sys.exit("Installez psutil :  sudo apt install python3-psutil")
 
 try:
     import serial
     import serial.tools.list_ports
 except ImportError:
-    sys.exit("Installez pyserial :  pip install pyserial")
+    sys.exit("Installez pyserial :  sudo apt install python3-serial")
 
 from proc_top import ProcTop
 
@@ -59,8 +61,33 @@ def _find_sysfs(pattern: str) -> str | None:
 
 _GPU_BUSY_PATH  = _find_sysfs("/sys/class/drm/card*/device/gpu_busy_percent")
 _GPU_TEMP_PATH  = _find_sysfs("/sys/class/drm/card*/device/hwmon/hwmon*/temp1_input")
+# PPT (Package Power Tracking) de l'APU, publié par amdgpu et lisible sans root :
+# puissance du socket entier (cœurs + iGPU + SoC), moyennée par le SMU sur ~1 s
+# (power1_input, instantané, retombe parfois à 0 W en pleine charge).
+_PPT_PATH       = _find_sysfs("/sys/class/drm/card*/device/hwmon/hwmon*/power1_average")
 _VRAM_USED_PATH = _find_sysfs("/sys/class/drm/card*/device/mem_info_vram_used")
 _VRAM_TOTAL_PATH= _find_sysfs("/sys/class/drm/card*/device/mem_info_vram_total")
+
+def _find_hwmon_temp(name: str, labels: tuple[str, ...]) -> str | None:
+    """tempN_input du capteur hwmon `name` dont le label est dans `labels`."""
+    for hwmon in sorted(glob.glob("/sys/class/hwmon/hwmon*")):
+        try:
+            if open(f"{hwmon}/name").read().strip() != name:
+                continue
+        except OSError:
+            continue
+        for label_path in sorted(glob.glob(f"{hwmon}/temp*_label")):
+            try:
+                if open(label_path).read().strip() in labels:
+                    return label_path[:-len("label")] + "input"
+            except OSError:
+                pass
+    return None
+
+_CPU_TEMP_PATH  = _find_hwmon_temp("k10temp", ("Tctl", "Tdie"))
+
+# scaling_cur_freq de chaque thread (kHz) : ce que psutil.cpu_freq() moyenne
+_CPU_FREQ_PATHS = sorted(glob.glob("/sys/devices/system/cpu/cpu[0-9]*/cpufreq/scaling_cur_freq"))
 
 _UPDATES_PATH   = '/var/lib/update-notifier/updates-available'
 
@@ -240,7 +267,13 @@ def _detect_ssd_health() -> None:
 # ── Lecture métriques ─────────────────────────────────────────────────────────
 
 def get_cpu_temp() -> float:
-    """Tctl depuis k10temp (AMD Ryzen)."""
+    """Tctl depuis k10temp (AMD Ryzen) : lecture directe du fichier hwmon,
+    psutil.sensors_temperatures() (qui balaye tout hwmon, ~2 ms) en repli."""
+    if _CPU_TEMP_PATH:
+        try:
+            return round(int(open(_CPU_TEMP_PATH).read()) / 1000.0, 1)
+        except Exception:
+            pass
     try:
         for entry in psutil.sensors_temperatures().get("k10temp", []):
             if entry.label in ("Tctl", "Tdie"):
@@ -294,35 +327,102 @@ def get_disk_io_per_ssd() -> list[tuple[float, float]]:
         return fallback
 
 
-def get_wifi() -> tuple[str, int]:
-    """(ssid sanitisé max 8 chars, signal %). Utilise nmcli."""
+_NM_BUS_NAME        = 'org.freedesktop.NetworkManager'
+_NM_WIFI_DEV_PATH   = None        # chemin D-Bus du périphérique WiFi NetworkManager
+_WIFI_CACHE         = ('', 0)
+_WIFI_NEXT          = 0.0
+_WIFI_INTERVAL      = 5.0         # s — NM ne rafraîchit la force du signal qu'aux scans
+
+
+def _nm_props(path: str):
+    return dbus.Interface(_DBUS_SYSBUS.get_object(_NM_BUS_NAME, path),
+                          'org.freedesktop.DBus.Properties')
+
+
+def _wifi_from_nm() -> tuple[str, int]:
+    """(ssid, signal %) du point d'accès actif, lus sur D-Bus NetworkManager :
+    mêmes valeurs que `nmcli dev wifi` (AccessPoint.Strength), sans fork."""
+    global _NM_WIFI_DEV_PATH
+    if _NM_WIFI_DEV_PATH is None:
+        devices = _nm_props('/org/freedesktop/NetworkManager').Get(
+            _NM_BUS_NAME, 'Devices')
+        for path in devices:
+            if int(_nm_props(path).Get(f'{_NM_BUS_NAME}.Device', 'DeviceType')) == 2:  # WiFi
+                _NM_WIFI_DEV_PATH = path
+                break
+        else:
+            return '', 0
     try:
-        out = subprocess.check_output(
-            ['nmcli', '-t', '-f', 'ACTIVE,SSID,SIGNAL', 'dev', 'wifi'],
-            text=True, timeout=1, stderr=subprocess.DEVNULL
-        )
-        for line in out.splitlines():
-            if line.startswith('oui:'):
-                rest = line[4:]
-                last = rest.rfind(':')
-                if last >= 0:
-                    ssid = rest[:last].replace(',', '').replace(':', '')[:8]
-                    sig  = int(rest[last + 1:])
-                    return ssid, sig
+        ap = _nm_props(_NM_WIFI_DEV_PATH).Get(
+            f'{_NM_BUS_NAME}.Device.Wireless', 'ActiveAccessPoint')
+    except Exception:
+        _NM_WIFI_DEV_PATH = None   # périphérique disparu : re-détection au prochain tour
+        raise
+    if ap == '/':
+        return '', 0
+    props = _nm_props(ap)
+    ssid  = bytes(props.Get(f'{_NM_BUS_NAME}.AccessPoint', 'Ssid')).decode('utf-8', 'replace')
+    sig   = int(props.Get(f'{_NM_BUS_NAME}.AccessPoint', 'Strength'))
+    return ssid, sig
+
+
+def _wifi_from_nmcli() -> tuple[str, int]:
+    """Repli si python3-dbus est absent. LC_ALL=C : ACTIVE vaut 'yes' quelle que
+    soit la langue du système."""
+    out = subprocess.check_output(
+        ['nmcli', '-t', '-f', 'ACTIVE,SSID,SIGNAL', 'dev', 'wifi'],
+        text=True, timeout=1, stderr=subprocess.DEVNULL,
+        env={**os.environ, 'LC_ALL': 'C'}
+    )
+    for line in out.splitlines():
+        if line.startswith('yes:'):
+            rest = line[4:]
+            last = rest.rfind(':')
+            if last >= 0:
+                return rest[:last], int(rest[last + 1:])
+    return '', 0
+
+
+def get_wifi() -> tuple[str, int]:
+    """(ssid sanitisé max 8 chars, signal %). Throttlé à 1 lecture/5 s."""
+    global _WIFI_CACHE, _WIFI_NEXT
+    now = time.monotonic()
+    if now < _WIFI_NEXT:
+        return _WIFI_CACHE
+    _WIFI_NEXT = now + _WIFI_INTERVAL
+    ssid, sig = '', 0
+    try:
+        if _ensure_dbus_bus():
+            ssid, sig = _wifi_from_nm()
+        else:
+            ssid, sig = _wifi_from_nmcli()
     except Exception:
         pass
-    return '', 0
+    _WIFI_CACHE = (ssid.replace(',', '').replace(':', '')[:8], sig)
+    return _WIFI_CACHE
+
+
+_VPN_CACHE    = False
+_VPN_NEXT     = 0.0
+_VPN_INTERVAL = 1.0   # s — net_if_stats() fait plusieurs ioctl par interface
 
 
 def get_vpn_status() -> bool:
     """True si une interface tun/tap/wg/vpn est UP."""
+    global _VPN_CACHE, _VPN_NEXT
+    now = time.monotonic()
+    if now < _VPN_NEXT:
+        return _VPN_CACHE
+    _VPN_NEXT = now + _VPN_INTERVAL
+    _VPN_CACHE = False
     try:
         for name, stats in psutil.net_if_stats().items():
             if stats.isup and any(p in name.lower() for p in ('tun', 'tap', 'vpn', 'wg')):
-                return True
+                _VPN_CACHE = True
+                break
     except Exception:
         pass
-    return False
+    return _VPN_CACHE
 
 
 def get_ssd_temps() -> list[float]:
@@ -421,6 +521,12 @@ def get_net_avg_kbps() -> int:
 
 def get_cpu_freq_x10() -> int:
     """Fréquence CPU moyenne × 10 (ex: 32 = 3.2 GHz)."""
+    if _CPU_FREQ_PATHS:
+        try:
+            khz = [int(open(p).read()) for p in _CPU_FREQ_PATHS]
+            return int(sum(khz) / len(khz) / 100_000)
+        except Exception:
+            pass
     try:
         f = psutil.cpu_freq()
         return int(f.current / 100) if f else 0
@@ -429,8 +535,14 @@ def get_cpu_freq_x10() -> int:
 
 
 def get_cpu_power_w() -> int:
-    """Puissance CPU via RAPL (W). Retourne 0 si non accessible (permission root)."""
+    """Puissance du package CPU (W) : PPT amdgpu, sinon RAPL (energy_uj, réservé à
+    root depuis CVE-2020-8694/12912). Retourne 0 si aucune source n'est lisible."""
     global _rapl_prev
+    if _PPT_PATH:
+        try:
+            return round(int(open(_PPT_PATH).read()) / 1e6)
+        except Exception:
+            pass
     try:
         e = int(open(_RAPL_PATH).read())
         now = time.monotonic()
@@ -648,7 +760,7 @@ def collect() -> dict:
     def _cap(i, j): return caps[i][j]  if i < len(caps)   else 0
 
     return {
-        "cpu_pct":    round(psutil.cpu_percent(), 1),
+        "cpu_pct":    round(sum(cores) / len(cores), 1) if cores else 0.0,
         "cpu_temp":   get_cpu_temp(),
         "gpu_pct":    get_gpu_usage(),
         "gpu_temp":   get_gpu_temp(),
@@ -859,6 +971,15 @@ def preflight_check(port: str) -> None:
         print("  VRAM GPU      MANQUANT  (mem_info_vram_used non trouvé)")
         errors.append("VRAM GPU")
 
+    # Puissance package (PPT amdgpu, sinon RAPL)
+    get_cpu_power_w()   # amorce le différentiel RAPL
+    time.sleep(0.1)
+    watts = get_cpu_power_w()
+    if watts > 0:
+        print(f"  Puissance     OK  {watts} W  ({_PPT_PATH or _RAPL_PATH})")
+    else:
+        print("  Puissance     n/a  (ni PPT amdgpu, ni RAPL lisible sans root)")
+
     # Veille écran (Mutter PowerSaveMode)
     off = get_display_off()
     if off is None:
@@ -888,6 +1009,7 @@ _PROCS_INTERVAL = 1.0     # s entre deux trames P: (top processus, écran 2)
 _PROCS_OFFSET   = 0.125   # s de décalage de P: par rapport à la trame principale
 _ICON_INTERVAL  = 0.1     # s minimum entre deux icônes (8 lignes I:, ~2,9 Ko)
 _OUT_MAX        = 1024    # o en attente au-delà desquels une trame d'écran est sautée
+_MAX_WAIT       = 0.25    # s — attente maximale dans select() (garde-fou)
 
 
 def _flush(fd: int, out: bytearray) -> None:
@@ -907,11 +1029,16 @@ def _flush(fd: int, out: bytearray) -> None:
 def _read_icon_requests(fd: int, rx: bytearray) -> list[int]:
     """Hashs des demandes d'icônes « ?I:<hash> » envoyées par l'ESP32."""
     try:
-        rx += os.read(fd, 1024)
+        chunk = os.read(fd, 1024)
     except BlockingIOError:
         return []
     except OSError as exc:
         raise serial.SerialException(str(exc))
+    # Appelée seulement si select() a signalé le port lisible : 0 octet = port
+    # raccroché (VMIN=0 : sans ce garde-fou, select() bouclerait à vide)
+    if not chunk:
+        raise serial.SerialException("le port signale des données mais n'en renvoie aucune")
+    rx += chunk
     if len(rx) > 4096:          # pas de \n depuis longtemps : ce n'est pas une demande
         del rx[:-64]
     reqs = []
@@ -996,6 +1123,7 @@ def run(port: str, baud: int, interval: float, sleep_delay: float) -> None:
             out_buf    = bytearray()   # tampon de sortie unique (toutes les trames)
             rx_buf     = bytearray()
             icon_queue: list[int] = []
+            readable   = False         # select() a signalé des octets à lire
 
             try:
                 while True:
@@ -1048,7 +1176,7 @@ def run(port: str, baud: int, interval: float, sleep_delay: float) -> None:
                             next_procs = now + _PROCS_INTERVAL
                         frame_queued = True
 
-                    for h in _read_icon_requests(fd, rx_buf):
+                    for h in (_read_icon_requests(fd, rx_buf) if readable else ()):
                         if h not in icon_queue and procs.icons.blob(h) is not None:
                             icon_queue.append(h)
                     # Icônes : seulement quand aucune trame d'écran n'attend
@@ -1057,7 +1185,17 @@ def run(port: str, baud: int, interval: float, sleep_delay: float) -> None:
                         next_icon = now + _ICON_INTERVAL
 
                     _flush(fd, out_buf)
-                    time.sleep(0.01)
+
+                    # Dort jusqu'à la prochaine échéance, une demande ?I: de l'ESP32
+                    # ou de la place dans le FIFO de sortie : ~20 réveils/s au lieu
+                    # de 100 avec un sleep(0.01) fixe.
+                    deadlines = [next_send, next_procs]
+                    if sleep_delay > 0:
+                        deadlines.append(next_display_poll)
+                    if icon_queue and not out_buf:   # sinon : réveil quand le FIFO se libère
+                        deadlines.append(next_icon)
+                    timeout = min(max(0.0, min(deadlines) - time.monotonic()), _MAX_WAIT)
+                    readable = bool(select.select([fd], [fd] if out_buf else [], [], timeout)[0])
             finally:
                 ser.close()
 

@@ -67,10 +67,10 @@ Le pilote Hynitron est écrit pour ESP-IDF 4.4 (ancien driver I2C, types FreeRTO
 ```
 ┌──────────────────────────────────────┐
 │ WifiSSID |||..                VPN ON │  ← ligne 1 : SSID + barres (font_12) | VPN (font_12)
-│ 512 KB/s                    14h 09m  │  ← ligne 2 : débit réseau (font_12) | uptime (font_12)
+│ 512 KB/s                     14h 9m  │  ← ligne 2 : débit réseau (font_12) | uptime (font_12, `4j 16h9m` au-delà d'un jour)
 ├──────────────────────────────────────┤  ← séparateur header / CPU
 │         Arc CPU  %  °C               │  ← CPU % (font_20) + °C, couleur dynamique
-│            3.2 GHz                   │  ← fréquence CPU (font_10)
+│          3.2 GHz  45W                │  ← fréquence CPU + puissance du package (font_10, orange doux, centrées ; `45W` masqué si `CPWR = 0`)
 │     CPU  ·  Ryzen 9 7940HS           │  ← labels fixes (font_8)
 ├──────────────────────────────────────┤
 │  Barres 16 cœurs (0-7 / 8-15)        │  ← 2 rangées × 8, numéros colorés sous chaque barre
@@ -86,13 +86,13 @@ Le pilote Hynitron est écrit pour ESP-IDF 4.4 (ancien driver I2C, types FreeRTO
 ├──────────────────────────────────────┤
 │ SSD1 100%  38°C          123/1832 GB │  ← Titre SSD1, santé SMART, temp. centrée, capa. droite
 │  R - W  [══════]             16 KB/s │  ← R et W en vert si actifs (> 512 KB/s), gauge centrée entre les 2 textes
-│ SSD2 100%   32°C           480/1863GB│  ← ligne partagée : SSD2 (santé+temp.+capa.) si UPD == 0, sinon msg sur le nombre de maj disponibles
+│ SSD2 100%   32°C           480/1863GB│  ← ligne partagée : SSD2 (santé+temp.+capa.) si UPD == 0, sinon nombre de maj disponibles
 │                                      │
 │      Zorin OS 18.1 (6.17.040)        │  ← ligne de statut (bas d'écran) : OSKV si connecté, sinon "En attente du PC..."
 └──────────────────────────────────────┘
 ```
 
-> La ligne SSD2 ci-dessus n'est visible que quand `UPD == 0` (aucune mise à jour dispo) — sinon cette même ligne affiche `N mises à jour disponibles` (orange, centré), comme avant l'ajout de SSD2.
+> La ligne SSD2 ci-dessus n'est visible que quand `UPD == 0` (aucune mise à jour dispo) — sinon cette même ligne affiche `N maj disponibles` (orange, centré). Si la santé SSD2 est indisponible (`S2HLTH = 255`) et qu'il n'y a pas de mise à jour, la ligne reste vide.
 
 **Couleurs dynamiques** (tous les widgets) :
 - Pourcentage : < 50 % → vert · < 70 % → jaune · < 85 % → orange · ≥ 85 % → rouge
@@ -100,6 +100,7 @@ Le pilote Hynitron est écrit pour ESP-IDF 4.4 (ancien driver I2C, types FreeRTO
 - Signal WiFi : ≥ 70 % → colore le SSID en vert · ≥ 40 % → orange · < 40 % → rouge
 - VPN : actif → vert · inactif → gris
 - % CPU et GPU : affichés en bleu (`CLR_GPU`)
+- Fréquence + puissance CPU (`3.2 GHz  45W`) : orange doux fixe (`0xE0A060`), volontairement plus terne que l'orange des seuils (`0xFF8C00`) pour ne pas passer pour une alerte
 - Numéros de cœurs : colorés selon leur activité (même couleur que la barre, > 5 %)
 - Santé SMART SSD : ≥ 90 % → vert · ≥ 70 % → orange · < 70 % → rouge
 
@@ -150,8 +151,8 @@ CX:55;12;8;6;4;3;2;1;78;45;12;8;5;3;2;1
 
 | Clé | Valeur |
 |-----|--------|
-| `CPU` | % utilisation CPU global (entier) |
-| `CTEMP` | Température CPU °C (k10temp/Tctl, entier) |
+| `CPU` | % utilisation CPU global (entier), moyenne des 16 threads de `CX` |
+| `CTEMP` | Température CPU °C (k10temp/Tctl, lu directement dans son fichier hwmon, entier) |
 | `GPU` | % utilisation GPU (gpu_busy_percent sysfs, entier) |
 | `GTEMP` | Température GPU °C (amdgpu/edge, entier) |
 | `RAM` | % RAM utilisée (entier) |
@@ -162,14 +163,14 @@ CX:55;12;8;6;4;3;2;1;78;45;12;8;5;3;2;1
 | `SHLTH` | % de santé SMART SSD1 (`100 - percent_used`, via UDisks2/D-Bus, sans root). `255` = indisponible (pas de NVMe, ou D-Bus/UDisks2 absent) — non affiché sur l'écran dans ce cas |
 | `S2TMP` | Température SSD2 °C. Pas de sysfs hwmon pour ce pont USB-SATA : lue via UDisks2/D-Bus (`Drive.Ata.SmartTemperature`, sans root). `0` si indisponible |
 | `S2CAP` / `S2TOT` | Espace utilisé / total SSD2 en GB |
-| `S2HLTH` | Santé SSD2 : `100` (vert, sain) / `20` (rouge, WARN — `SmartFailing`, attribut en échec, ou secteur défectueux) / `255` = indisponible. Pas de % d'usure fiable sur ATA générique (contrairement au NVMe), d'où un statut binaire affiché en valeurs symboliques. Affiché sur la ligne des mises à jour, uniquement quand `UPD == 0` |
+| `S2HLTH` | Santé SSD2 : `100` (vert, sain) / `20` (rouge, WARN — `SmartFailing`, attribut en échec, ou secteur défectueux) / `255` = indisponible. Pas de % d'usure fiable sur ATA générique (contrairement au NVMe), d'où un statut binaire affiché en valeurs symboliques. Affiché sur la ligne des mises à jour, uniquement quand `UPD == 0` ; avec `255`, toute la ligne SSD2 est masquée |
 | `VUSED` / `VTOT` | VRAM utilisée / totale en MB (sysfs amdgpu) |
-| `WNAM` | SSID WiFi (max 8 chars, sanitisé) |
-| `WSIG` | Qualité signal WiFi % (nmcli) — colore le SSID, non affiché en chiffre |
-| `VPN` | VPN actif : 1 / inactif : 0 (interface tun/wg détectée) |
+| `WNAM` | SSID WiFi (max 8 chars, sanitisé), lu sur D-Bus NetworkManager toutes les 5 s |
+| `WSIG` | Qualité signal WiFi % (`AccessPoint.Strength` de NetworkManager, même valeur que `nmcli dev wifi`, rafraîchie toutes les 5 s) — colore le SSID et donne les 5 barres `\|\|\|..`, non affiché en chiffre |
+| `VPN` | VPN actif : 1 / inactif : 0 (interface tun/tap/wg/vpn UP, vérifié 1×/s) |
 | `NTOT` | Débit réseau total lissé en KB/s (upload + download, EMA α=0.25, interface WiFi) |
-| `CFRQ` | Fréquence CPU moyenne × 10 (ex: `32` = 3.2 GHz, `psutil.cpu_freq()`) |
-| `CPWR` | Puissance CPU en Watts via RAPL (0 si non lisible sans root) |
+| `CFRQ` | Fréquence CPU moyenne × 10 (ex: `32` = 3.2 GHz, moyenne des `scaling_cur_freq` des 16 threads) |
+| `CPWR` | Puissance du package APU en Watts (PPT amdgpu, sinon RAPL ; `0` = aucune source lisible → non affichée) |
 | `UPTS` | Uptime système en secondes (`time.time() − psutil.boot_time()`) |
 | `OSKV` | Nom OS + version + noyau tronqué, ex `Zorin OS 18.1 (6.17.040)` (max 40 chars, affiché sur la ligne du bas quand connecté) |
 | `UPD` | Nombre de mises à jour dispo (`/var/lib/update-notifier/updates-available`, rafraîchi ~1-2x/jour par `apt-daily.timer` — pas temps réel). Ligne orange affichée uniquement si > 0 |
@@ -182,13 +183,54 @@ CX:55;12;8;6;4;3;2;1;78;45;12;8;5;3;2;1
 
 ---
 
+## Mesure de la puissance (wattage)
+
+Le chiffre `nnW` affiché à côté de la fréquence, sous l'arc CPU, est la **puissance du package APU** (PPT, *Package Power Tracking*) : la puce Ryzen 9 7940HS entière.
+
+| Compté | Non compté |
+|--------|------------|
+| 8 cœurs Zen 4 (16 threads) et leur cache L3 | RAM (barrettes DDR5) |
+| iGPU Radeon 780M | SSD, WiFi, Ethernet, USB externes |
+| SoC : contrôleur mémoire, PCIe/USB, moteur d'affichage, NPU… | Ventilateur, régulateurs de la carte mère, bloc secteur |
+
+La consommation à la prise est donc plus élevée que ce chiffre (non mesurée ici).
+
+**Source** : `power1_average` du hwmon amdgpu (label `PPT`, ex. `/sys/class/drm/card1/device/hwmon/hwmon7/power1_average`, en µW, chemin résolu au démarrage), lisible sans root. C'est une estimation calculée par le SMU (le microcontrôleur de gestion d'énergie du Ryzen), qui s'en sert lui-même pour appliquer ses limites de puissance et décider des fréquences turbo. Le script la lit à chaque trame (0,25 s), l'arrondit au watt et l'envoie dans `CPWR`.
+
+**Lissage** : la valeur est moyennée par le SMU sur ~1 à 2 s. Elle met environ 2 s à suivre un changement brusque de charge (montée de 5 à 55 W en ~2,5 s). `power1_input` (valeur instantanée) n'est pas utilisée : elle retombe parfois à 0 W en pleine charge.
+
+**Ordres de grandeur mesurés sur ce NUC** :
+
+| Situation | `CPWR` |
+|-----------|--------|
+| Repos (bureau, écran allumé) | ~5–6 W |
+| 8 threads CPU saturés | ~55–58 W |
+| iGPU chargé (`glxgears` sans vsync, + CPU qui l'alimente) | ~50 W |
+
+Le 7940HS est prévu pour 35–54 W en continu ; la valeur exacte et les pointes autorisées sont réglées par le fabricant du NUC dans le BIOS.
+
+**Repli RAPL** : sans hwmon amdgpu, le script calcule la puissance à partir du compteur d'énergie RAPL (`/sys/class/powercap/intel-rapl:0/energy_uj`, domaine `package-0`, différence entre deux lectures). Ce compteur existe sur ce Ryzen (module `intel_rapl_msr`) mais n'est lisible que par root depuis les correctifs des attaques par canal auxiliaire Platypus (CVE-2020-8694 / CVE-2020-12912) : pour le service (`User=daniel`), il renvoie 0. Ne pas le rouvrir aux autres utilisateurs par une règle udev : PPT donne la même information sans affaiblir ce correctif.
+
+**Pas de séparation CPU / iGPU** : ce Ryzen (Phoenix, SMU 13.0.4) n'a aucun capteur de puissance propre à l'iGPU. Le fichier `gpu_metrics` d'amdgpu publie la puissance par cœur (`CorePower[8]`) et deux rails : `VDDCR_VDD`, que le pilote range dans le champ `average_gfx_power` malgré son nom, et qui suit en fait la charge CPU (55 W sous une charge purement CPU, à peine plus que la somme des cœurs avec l'iGPU chargé) : ce n'est pas la puissance de l'iGPU ; et `VDDCR_SOC` (~1–2 W). « Total − cœurs » ne donnerait qu'une approximation (iGPU + L3 + SoC, ~5 W même au repos) : le total est donc affiché tel quel, sous l'arc CPU. En jeu ou en vidéo, il peut monter alors que le % CPU reste bas, parce que c'est l'iGPU qui consomme.
+
+**Vérifier à la main** :
+```bash
+cat /sys/class/drm/card*/device/hwmon/hwmon*/power1_label     # doit afficher PPT
+cat /sys/class/drm/card*/device/hwmon/hwmon*/power1_average   # µW (5100000 = 5,1 W)
+sensors 'amdgpu-pci-*'                                        # ligne « PPT: 22.17 W (avg = 6.02 W) » : c'est avg qui est affiché
+sudo journalctl -u nuc-monitor | grep Puissance               # source retenue au démarrage du service
+```
+Au démarrage, le preflight affiche `Puissance OK n W (<chemin>)`, ou `n/a` si ni PPT ni RAPL n'est lisible (l'écran n'affiche alors que la fréquence).
+
+---
+
 ## Installation
 
 ### Dépendances Python (NUC)
 
 ```bash
-pip install psutil pyserial
-sudo apt install python3-dbus   # optionnel (déjà présent sur Zorin) : santé SMART SSD1/SSD2 + veille écran ESP32 + piles souris/clavier
+sudo apt install python3-psutil python3-serial   # le service tourne avec /usr/bin/python3 ; pip y est bloqué (PEP 668)
+sudo apt install python3-dbus   # optionnel (déjà présent sur Zorin) : WiFi, santé SMART SSD1/SSD2, veille écran ESP32, piles souris/clavier
 sudo apt install python3-pil python3-gi gir1.2-gdkpixbuf-2.0   # optionnel (déjà présents sur Zorin) : icônes de l'écran 2 (Pillow requis, GdkPixbuf pour les SVG)
 ```
 
@@ -201,7 +243,7 @@ python tools/monitor_sender.py --interval 0.25     # rafraîchissement 0.25 s (d
 python tools/monitor_sender.py --sleep-delay 600   # veille ESP32 600 s après l'extinction de l'écran du NUC (défaut, 0 = jamais)
 ```
 
-Le script effectue un preflight check au démarrage (port, CPU/GPU/SSD temp, santé SMART, WiFi, VPN, RAM, VRAM, SSD, veille écran) et reconnecte automatiquement en cas de déconnexion USB.
+Le script effectue un preflight check au démarrage (port, CPU/GPU/SSD temp, santé SMART, WiFi, VPN, RAM, VRAM, SSD, puissance, veille écran) et reconnecte automatiquement en cas de déconnexion USB.
 
 ### Démarrage automatique (Zorin OS 18 / systemd)
 
@@ -230,7 +272,7 @@ sudo systemctl daemon-reload
 ### Flash ESP32 (PlatformIO)
 
 ```bash
-pio run -e sys_monitor -t upload
+~/.platformio/penv/bin/pio run -e sys_monitor -t upload   # pio n'est pas dans le PATH
 ```
 
 L'environnement `sys_monitor` dans `platformio.ini` active `-DARDUINO_USB_CDC_ON_BOOT=1` pour que `Serial` utilise le CDC USB-JTAG (HWCDC) et non l'UART0.
@@ -358,7 +400,7 @@ Les trames `CPU:` (0,25 s), `P:` (1 s) et `I:` (à la demande) ne se gênent pas
 - **Un seul envoyeur** : une seule boucle Python écrit sur le port, les lignes partent l'une après l'autre et ne peuvent pas se mélanger.
 - **L'ESP32 découpe par ligne** (`\n`) et dirige chaque ligne selon son préfixe (`P:`, `I:`, sinon trame principale).
 - **Décalage** : `P:` part 0,125 s après la trame principale, et jamais dans le même tour de boucle.
-- **Tampon de sortie unique** : si le FIFO USB est plein, `os.write` n'écrit qu'une partie ; le reste est gardé et envoyé au tour suivant (10 ms plus tard) au lieu d'être perdu. Si l'ESP32 ne lit plus du tout (plus de 1 Ko en attente), les nouvelles trames d'écran sont sautées plutôt qu'empilées.
+- **Tampon de sortie unique** : si le FIFO USB est plein, `os.write` n'écrit qu'une partie ; le reste est gardé et envoyé dès que le FIFO a de la place (`select()` surveille le port en écriture) au lieu d'être perdu. Si l'ESP32 ne lit plus du tout (plus de 1 Ko en attente), les nouvelles trames d'écran sont sautées plutôt qu'empilées.
 - **Icônes en dernier** : les 8 lignes d'une icône (~2,9 Ko) ne partent que si aucune trame d'écran n'attend, au maximum une icône toutes les 100 ms. Le tampon RX de l'ESP32 fait 4096 octets.
 
 ```
@@ -373,15 +415,19 @@ Les trames `CPU:` (0,25 s), `P:` (1 s) et `I:` (à la demande) ne se gênent pas
 - **HWCDC vs HardwareSerial** : l'ESP32-S3 expose `Serial` en HWCDC quand `ARDUINO_USB_CDC_ON_BOOT=1`. Sans ce flag, `Serial.available()` reste toujours à 0.
 - **Buffer série HWCDC** : le buffer RX logiciel est étendu à 4096 octets via `Serial.setRxBufferSize(4096)` (défaut = 256) pour absorber une icône complète (8 lignes `I:`) pendant un rendu LVGL. Le buffer de ligne de `serial_parser.h` reste à 512 octets. `Serial.setTxTimeoutMs(0)` : les demandes `?I:` ne bloquent jamais si le PC ne lit pas. Le script Python tronque les lignes dépassant 510 octets avant envoi. En cas de ligne trop longue côté firmware, `serial_read_line()` rejette la ligne entière (flag `overflow`) plutôt que de parser des données tronquées.
 - **Double-open série** : l'ouverture de `/dev/ttyACM0` sous Linux déclenche un reset USB-JTAG. Le script ouvre deux fois le port (drain + close entre les deux) pour obtenir une session cdc-acm propre.
-- **Protocole compact** : les 16 cœurs CPU sont encodés dans un seul champ `CX:v;v;...;v` (séparateur `;`) au lieu de 16 champs `C0`…`C15`. Les débits SSD sont en KB/s entier (pas en MB/s décimal) pour une meilleure précision sub-MB/s. Taille typique d'un message : ~295 octets mesurés, pire cas estimé ~385 octets (OSKV à 40 caractères, 16 cœurs à 100 %, débits SSD à 7 chiffres), soit plus de 120 octets de marge sous les 510 du buffer. Vérifier ce budget avant tout ajout de champ.
-- **Troncature `OSKV`** : la version noyau (`platform.release()`, ex: `6.17.0-40-generic`) est compactée en jetant les segments alphabétiques (`generic`, `lowlatency`, ...) et en concaténant sans tiret les segments numériques restants avec le premier segment : `6.17.0-40-generic` → `6.17.040`. La chaîne finale `OS_NAME OS_VERSION (kernel)` est tronquée à 40 caractères et nettoyée des `,`/`:` (délimiteurs du protocole) avant envoi. Calculée une seule fois au démarrage du script (ne change pas en cours d'exécution), comme le SSID WiFi tronqué à 8 caractères.
+- **Protocole compact** : les 16 cœurs CPU sont encodés dans un seul champ `CX:v;v;...;v` (séparateur `;`) au lieu de 16 champs `C0`…`C15`. Les débits SSD sont en KB/s entier (pas en MB/s décimal) pour une meilleure précision sub-MB/s. Taille typique d'un message : ~330 octets mesurés, pire cas calculé ~415 octets (OSKV à 40 caractères, 16 cœurs à 100 %, débits SSD à 7 chiffres, débit réseau à 6 chiffres), soit ~95 octets de marge sous les 510 du buffer. Vérifier ce budget avant tout ajout de champ.
+- **Troncature `OSKV`** : la version noyau (`platform.release()`, ex: `6.17.0-40-generic`) est compactée en jetant les segments alphabétiques (`generic`, `lowlatency`, ...) et en concaténant sans tiret les segments numériques restants avec le premier segment : `6.17.0-40-generic` → `6.17.040`. La chaîne finale `OS_NAME OS_VERSION (kernel)` est tronquée à 40 caractères et nettoyée des `,`/`:` (délimiteurs du protocole) avant envoi. Calculée une seule fois au démarrage du script (ne change pas en cours d'exécution).
 - **Débit réseau EMA** : `get_net_avg_kbps()` calcule le total upload + download sur l'interface WiFi (`wl*`) et le lisse via une moyenne exponentielle (α=0.25 ≈ constante de temps ~1 s). Affiché en KB/s ou MB/s selon le débit, identique à un indicateur de copie de fichier.
-- **Fréquence CPU** : `psutil.cpu_freq()` retourne la fréquence courante en MHz ; transmise × 10 pour conserver une décimale entière (ex: 32 = 3.2 GHz). Décodée côté firmware avec division entière.
-- **Puissance CPU RAPL** : `/sys/class/powercap/intel-rapl:0/energy_uj` — lecture root uniquement par défaut. Retourne 0 si non accessible ; l'affichage s'adapte (`X.X GHz` seul, sans `XXW`). Pour l'activer sans root : `SUBSYSTEM=="powercap", ACTION=="add", RUN+="/bin/chmod o+r /sys/class/powercap/intel-rapl:0/energy_uj"` dans `/etc/udev/rules.d/99-rapl.rules`.
+- **Fréquence CPU** : moyenne des `/sys/devices/system/cpu/cpu*/cpufreq/scaling_cur_freq` (kHz, chemins résolus au démarrage ; c'est ce que moyenne `psutil.cpu_freq()`, utilisé en repli) ; transmise × 10 pour conserver une décimale entière (ex: 32 = 3.2 GHz). Décodée côté firmware en divisant par 10.
+- **Puissance du package (`CPWR`)** : lue dans `power1_average` du hwmon amdgpu (PPT), RAPL en repli. Voir [Mesure de la puissance (wattage)](#mesure-de-la-puissance-wattage).
 - **LVGL %f** : `lv_snprintf` (LVGL 8.3) ne supporte pas `%f`. Toutes les valeurs float sont converties en entiers avant formatage (`(int)(val + 0.5f)`).
 - **VRAM source** : `/sys/class/drm/card1/device/mem_info_vram_used` et `mem_info_vram_total` (driver amdgpu, pas besoin de ROCm).
 - **Temp NVMe** : `/sys/class/nvme/nvme0/hwmon*/temp1_input` (millidegrés → divisé par 1000).
-- **VPN detection** : `psutil.net_if_stats()` — toute interface contenant `tun`, `tap`, `vpn` ou `wg` et marquée UP est considérée VPN actif (couvre `qtun`, `tun0`, `wg0`, etc.).
+- **VPN detection** : `psutil.net_if_stats()` — toute interface contenant `tun`, `tap`, `vpn` ou `wg` et marquée UP est considérée VPN actif (couvre `qtun`, `tun0`, `wg0`, etc.). Vérifié 1×/s (`_VPN_INTERVAL`), valeur mise en cache entre deux.
+- **WiFi** : SSID et force du signal du point d'accès actif sont lus sur le bus D-Bus système de NetworkManager (`Device.Wireless.ActiveAccessPoint` → `AccessPoint.Ssid` / `Strength`), toutes les 5 s (`_WIFI_INTERVAL`) : NetworkManager ne rafraîchit la force qu'à ses scans. Avant, le script lançait `nmcli` 4×/s : plus de la moitié du CPU du service partait dans ces processus, et `nmcli` mettait parfois plusieurs secondes à répondre (SSID vide). `nmcli` ne sert plus que de repli si `python3-dbus` est absent, lancé avec `LC_ALL=C` pour ne pas dépendre de la langue (`yes`/`oui`).
+- **Températures** : `CTEMP` est lu directement dans le fichier hwmon de `k10temp` (`Tctl`), résolu au démarrage ; `psutil.sensors_temperatures()`, qui relit tous les capteurs (~2 ms), ne sert qu'en repli.
+- **Boucle d'envoi** : entre deux tours, le script dort dans `select()` jusqu'à la prochaine échéance (trame principale, trame `P:`, lecture de la veille, icône), une demande `?I:` de l'ESP32 ou de la place dans le FIFO de sortie (max 0,25 s). Environ 20 réveils/s au lieu de 100 avec l'ancien `sleep(0.01)`. Le port n'est lu que si `select()` le signale lisible : en mode raw (`VMIN=0`), `read()` renvoie 0 octet quand il n'y a rien à lire, et 0 octet après « lisible » signifie que le port est raccroché (débranchement → reconnexion).
+- **Coût CPU** : ~2 % d'un thread pour tout le service (mesuré sur 30 s), sans aucun processus enfant. Pour le mesurer : comparer `usage_usec` de `/sys/fs/cgroup/system.slice/nuc-monitor.service/cpu.stat` à quelques minutes d'intervalle (`top` ne montre pas le CPU des processus enfants).
 - **Rétroéclairage PWM** : backlight sur `TFT_BL` (GPIO 1) via LEDC, canal 0, 5 kHz, 8-bit. `BL_BRIGHTNESS = 153` ≈ 60 % dans `sys_monitor.ino` — modifier cette valeur pour ajuster la luminosité (0–255).
 - **Gauge SSD1** : barre unique affichant `R+W` cumulés en KB/s, centrée entre les labels `R - W` et le débit affiché à droite. Échelle : 20 000 KB/s (≈ 20 MB/s) = 100 %. Affichage dynamique : `KB/s` sous 10 240 KB/s, `MB/s` au-dessus. Les indicateurs R et W s'allument en vert au-dessus de 512 KB/s.
 - **Santé SMART SSD1** : lue via l'interface D-Bus `org.freedesktop.UDisks2.NVMe.Controller` (méthode `SmartGetAttributes`, propriété `percent_used`), exposée par le service `UDisks2` déjà actif sur le système — **aucun droit root requis** (contrairement à `smartctl`/`nvme-cli` classiques, qui nécessitent un accès direct au device `/dev/nvme0`). Uniquement disponible pour le disque NVMe (SSD1) ; le module Python `dbus` (paquet système `python3-dbus`, déjà présent) est optionnel — son absence désactive juste la fonctionnalité. La lecture D-Bus est throttlée à 1×/60 s côté script (`_SSD_HEALTH_INTERVAL`), la santé SMART ne variant pas assez vite pour justifier un appel à chaque cycle de 0.25 s.
@@ -422,6 +468,12 @@ sudo systemctl status nuc-monitor
 **Les piles souris/clavier n'apparaissent pas (colonnes vides à côté de l'arc GPU)**
 → Vérifier qu'UPower voit les périphériques : `upower -d` doit lister la souris (`hidpp_battery_*`) et le clavier (`keyboard_dev_*`) avec un `percentage`. Si un périphérique est listé mais affiché du mauvais côté, son nom de modèle ne correspond pas aux motifs `_KBD_MODEL_RE` / `_MOUSE_MODEL_RE` de `monitor_sender.py` : les compléter. Les valeurs étant rafraîchies toutes les 60 s, attendre jusqu'à 1 min après un changement (branchement en charge, rallumage du clavier).
 
+**Le SSID WiFi est vide ou le signal reste à 0**
+→ Vérifier que NetworkManager voit le point d'accès : `busctl get-property org.freedesktop.NetworkManager /org/freedesktop/NetworkManager org.freedesktop.NetworkManager Devices` puis, sur le périphérique WiFi, `ActiveAccessPoint` (`/` = pas connecté). Les valeurs sont rafraîchies toutes les 5 s : attendre jusqu'à 5 s après une reconnexion. Sans `python3-dbus`, le script se rabat sur `nmcli`.
+
+**La puissance (`nnW`) n'apparaît pas à côté de la fréquence CPU**
+→ Le script envoie `CPWR:0`, que l'écran masque. Vérifier la ligne `Puissance` du preflight (`sudo journalctl -u nuc-monitor | grep Puissance`) : `n/a` signifie que ni le PPT amdgpu ni RAPL n'est lisible. Contrôler `cat /sys/class/drm/card*/device/hwmon/hwmon*/power1_average` (voir [Mesure de la puissance](#mesure-de-la-puissance-wattage)). Un service démarré avec une ancienne version du script (qui ne lisait que RAPL, réservé à root) affiche toujours 0 : redéployer avec `bash tools/deploy.sh --no-flash`.
+
 **L'écran 2 reste vide ou les icônes restent des pastilles**
 → Écran 2 vide : le script Python ne transmet plus de trame `P:` depuis 5 s (ancienne version du script, ou script arrêté) ; relancer `bash tools/deploy.sh --no-flash`. Pastilles permanentes : Pillow est absent (`sudo apt install python3-pil`), ou l'appli n'a pas d'icône trouvable ; la pastille est alors le comportement normal. Les icônes déjà rendues sont dans `~/.cache/nuc-monitor/icons/`, et ce dossier peut être supprimé sans risque.
 
@@ -438,4 +490,5 @@ sudo systemctl status nuc-monitor
 - [LVGL 8.3.0](https://github.com/lvgl/lvgl) — ne pas mettre à jour (rotation logicielle forcée)
 - Pilote tactile Hynitron V2.10, fourni par LilyGo ([branche `T-Display-S3-Long-cst3530`](https://github.com/Xinyuan-LilyGO/T-Display-S3-Long/tree/T-Display-S3-Long-cst3530)) — `HYN_POWER_ON_UPDATA` laissé à `0`
 - psutil, pyserial (Python)
+- dbus-python (`python3-dbus`, optionnel : WiFi, SMART, veille, piles)
 - Pillow, PyGObject / GdkPixbuf (Python, optionnels : icônes de l'écran 2)
