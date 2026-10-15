@@ -98,7 +98,7 @@ Le pilote Hynitron est écrit pour ESP-IDF 4.4 (ancien driver I2C, types FreeRTO
 - Pourcentage : < 50 % → vert · < 70 % → jaune · < 85 % → orange · ≥ 85 % → rouge
 - Température CPU/GPU : < 60 °C → vert · < 75 °C → jaune · < 85 °C → orange · ≥ 85 °C → rouge
 - Signal WiFi : ≥ 70 % → colore le SSID en vert · ≥ 40 % → orange · < 40 % → rouge
-- VPN : actif → vert · inactif → gris
+- VPN : actif → vert · inactif → gris (compatible avec la plupart des VPN du marché, voir [Détection du VPN](#détection-du-vpn))
 - % CPU et GPU : affichés en bleu (`CLR_GPU`)
 - Fréquence + puissance CPU (`3.2 GHz  45W`) : orange doux fixe (`0xE0A060`), volontairement plus terne que l'orange des seuils (`0xFF8C00`) pour ne pas passer pour une alerte
 - Numéros de cœurs : colorés selon leur activité (même couleur que la barre, > 5 %)
@@ -167,7 +167,7 @@ CX:55;12;8;6;4;3;2;1;78;45;12;8;5;3;2;1
 | `VUSED` / `VTOT` | VRAM utilisée / totale en MB (sysfs amdgpu) |
 | `WNAM` | SSID WiFi (max 8 chars, sanitisé), lu sur D-Bus NetworkManager toutes les 5 s |
 | `WSIG` | Qualité signal WiFi % (`AccessPoint.Strength` de NetworkManager, même valeur que `nmcli dev wifi`, rafraîchie toutes les 5 s) — colore le SSID et donne les 5 barres `\|\|\|..`, non affiché en chiffre |
-| `VPN` | VPN actif : 1 / inactif : 0 (interface tun/tap/wg/vpn UP, vérifié 1×/s) |
+| `VPN` | VPN actif : 1 / inactif : 0 (interface UP point-à-point ou nommée tun/tap/wg/vpn/nord, vérifiée 1×/s, voir [Détection du VPN](#détection-du-vpn)) |
 | `NTOT` | Débit réseau total lissé en KB/s (upload + download, EMA α=0.25, interface WiFi) |
 | `CFRQ` | Fréquence CPU moyenne × 10 (ex: `32` = 3.2 GHz, moyenne des `scaling_cur_freq` des 16 threads) |
 | `CPWR` | Puissance du package APU en Watts (PPT amdgpu, sinon RAPL ; `0` = aucune source lisible → non affichée) |
@@ -221,6 +221,41 @@ sensors 'amdgpu-pci-*'                                        # ligne « PPT: 22
 sudo journalctl -u nuc-monitor | grep Puissance               # source retenue au démarrage du service
 ```
 Au démarrage, le preflight affiche `Puissance OK n W (<chemin>)`, ou `n/a` si ni PPT ni RAPL n'est lisible (l'écran n'affiche alors que la fréquence).
+
+---
+
+## Détection du VPN
+
+L'indicateur `VPN` du bandeau est **compatible avec la plupart des VPN du marché** : il ne dépend ni du fournisseur ni de son application, mais de l'interface réseau que crée le tunnel.
+
+**Règle** : le VPN est considéré actif dès qu'une interface réseau est UP et remplit l'une de ces conditions :
+- elle porte le flag `pointopoint` (lien point à point). C'est le cas des tunnels WireGuard et OpenVPN (mode tun), qui sont les deux technologies utilisées par la quasi-totalité des VPN grand public sous Linux ;
+- son nom contient `tun`, `tap`, `vpn`, `wg` ou `nord` (`_VPN_NAMES` dans `monitor_sender.py`). Ce filet couvre notamment OpenVPN en mode TAP, qui n'est pas point à point.
+
+Les interfaces du réseau local (Ethernet, WiFi, `lo`) et les ponts de Docker ou libvirt n'ont pas ce flag : ils ne déclenchent pas l'indicateur.
+
+| VPN / technologie | Interface typique | Détecté |
+|-------------------|-------------------|---------|
+| NordVPN, NordLynx (WireGuard) | `nordlynx` | ✅ testé (NordVPN 5.4.1) |
+| NordVPN, OpenVPN | `nordtun` | ✅ |
+| Mullvad, Proton VPN, Surfshark, PIA, ExpressVPN, CyberGhost, Windscribe, IVPN… (WireGuard ou OpenVPN) | `wg0-mullvad`, `proton0`, `tun0`… | ✅ attendu, non testé |
+| WireGuard (`wg-quick`) ou OpenVPN configurés à la main ou dans NetworkManager | `wg0`, `tun0` | ✅ |
+| VPN d'entreprise via OpenConnect (Cisco AnyConnect, GlobalProtect, Pulse) | `tun0`, `vpn0` | ✅ |
+| FortiGate SSL-VPN (`openfortivpn`), L2TP | `ppp0` | ✅ |
+| OpenVPN en mode TAP | `tap0` | ✅ (par le nom) |
+| IPsec / IKEv2 natif (strongSwan, Libreswan) | aucune | ❌ ces VPN ne créent en général pas d'interface |
+
+**Faux positifs connus** : une connexion PPPoE ou 4G (`ppp0`) et Tailscale (`tailscale0`) sont vues comme un VPN, même quand Tailscale ne sert pas de nœud de sortie. Ce cas ne se présente pas sur ce NUC.
+
+**Coût** : aucun surcoût. Le script réutilise l'appel `net_if_stats()` (~0,14 ms) et n'ajoute qu'une comparaison de chaînes. Une détection par la route par défaut (`ip route get 1.1.1.1`), plus exacte, a été écartée : elle lance un processus à chaque test (~1,4 ms).
+
+**Vérifier à la main** :
+```bash
+ip -br link                                                   # repérer l'interface du VPN (ex. nordlynx)
+python3 -c "import psutil; print({k: v.flags for k, v in psutil.net_if_stats().items()})"   # doit contenir pointopoint pour elle
+sudo journalctl -u nuc-monitor | grep VPN                     # ligne du preflight : « OK (actif) » ou « inactif »
+```
+Si un VPN n'est pas reconnu, ajouter un motif de son nom d'interface dans `_VPN_NAMES`.
 
 ---
 
@@ -423,7 +458,7 @@ Les trames `CPU:` (0,25 s), `P:` (1 s) et `I:` (à la demande) ne se gênent pas
 - **LVGL %f** : `lv_snprintf` (LVGL 8.3) ne supporte pas `%f`. Toutes les valeurs float sont converties en entiers avant formatage (`(int)(val + 0.5f)`).
 - **VRAM source** : `/sys/class/drm/card1/device/mem_info_vram_used` et `mem_info_vram_total` (driver amdgpu, pas besoin de ROCm).
 - **Temp NVMe** : `/sys/class/nvme/nvme0/hwmon*/temp1_input` (millidegrés → divisé par 1000).
-- **VPN detection** : `psutil.net_if_stats()` — toute interface contenant `tun`, `tap`, `vpn` ou `wg` et marquée UP est considérée VPN actif (couvre `qtun`, `tun0`, `wg0`, etc.). Vérifié 1×/s (`_VPN_INTERVAL`), valeur mise en cache entre deux.
+- **Détection VPN** : `psutil.net_if_stats()`, 1×/s (`_VPN_INTERVAL`), valeur mise en cache entre deux. Critères, compatibilité et limites : voir [Détection du VPN](#détection-du-vpn).
 - **WiFi** : SSID et force du signal du point d'accès actif sont lus sur le bus D-Bus système de NetworkManager (`Device.Wireless.ActiveAccessPoint` → `AccessPoint.Ssid` / `Strength`), toutes les 5 s (`_WIFI_INTERVAL`) : NetworkManager ne rafraîchit la force qu'à ses scans. Avant, le script lançait `nmcli` 4×/s : plus de la moitié du CPU du service partait dans ces processus, et `nmcli` mettait parfois plusieurs secondes à répondre (SSID vide). `nmcli` ne sert plus que de repli si `python3-dbus` est absent, lancé avec `LC_ALL=C` pour ne pas dépendre de la langue (`yes`/`oui`).
 - **Températures** : `CTEMP` est lu directement dans le fichier hwmon de `k10temp` (`Tctl`), résolu au démarrage ; `psutil.sensors_temperatures()`, qui relit tous les capteurs (~2 ms), ne sert qu'en repli.
 - **Boucle d'envoi** : entre deux tours, le script dort dans `select()` jusqu'à la prochaine échéance (trame principale, trame `P:`, lecture de la veille, icône), une demande `?I:` de l'ESP32 ou de la place dans le FIFO de sortie (max 0,25 s). Environ 20 réveils/s au lieu de 100 avec l'ancien `sleep(0.01)`. Le port n'est lu que si `select()` le signale lisible : en mode raw (`VMIN=0`), `read()` renvoie 0 octet quand il n'y a rien à lire, et 0 octet après « lisible » signifie que le port est raccroché (débranchement → reconnexion).
@@ -479,6 +514,9 @@ sudo systemctl status nuc-monitor
 
 **Le tactile ne répond pas (le bouton BOOT, lui, fonctionne)**
 → Regarder les messages `[HYN]` envoyés au démarrage : arrêter le service (`sudo bash tools/dev-mode.sh`), ouvrir le port série (`~/.platformio/penv/bin/pio device monitor`) et appuyer sur RST. Une ligne `IC_info ... ictype:caca220e` confirme que la CST3530 répond. Sans elle, la carte est peut-être de l'ancienne révision (tactile intégré à l'AXS15231B en `0x3B`, voir [Hardware](#hardware)), que ce firmware ne gère pas. Ne pas activer `HYN_POWER_ON_UPDATA` pour « réparer » la puce : la mise à jour de son firmware est irréversible.
+
+**L'indicateur VPN reste gris alors que le VPN est connecté**
+→ Le script ne reconnaît pas l'interface du VPN. Avant octobre 2026, seuls les noms contenant `tun`/`tap`/`vpn`/`wg` étaient reconnus : NordVPN en NordLynx (`nordlynx`) restait gris. Redéployer le script (`bash tools/deploy.sh --no-flash`), puis suivre la vérification de [Détection du VPN](#détection-du-vpn). Un VPN IPsec sans interface n'est pas détectable.
 
 **Le service systemd ne démarre pas**
 → `sudo journalctl -u nuc-monitor -f` pour voir les erreurs. Vérifier que l'ESP32 est branché ou laisser le service : il reconnecte automatiquement.

@@ -405,10 +405,11 @@ def get_wifi() -> tuple[str, int]:
 _VPN_CACHE    = False
 _VPN_NEXT     = 0.0
 _VPN_INTERVAL = 1.0   # s — net_if_stats() fait plusieurs ioctl par interface
+_VPN_NAMES    = ('tun', 'tap', 'vpn', 'wg', 'nord')
 
 
 def get_vpn_status() -> bool:
-    """True si une interface tun/tap/wg/vpn est UP."""
+    """True si une interface UP est point-à-point (WireGuard, tun) ou porte un nom de VPN connu."""
     global _VPN_CACHE, _VPN_NEXT
     now = time.monotonic()
     if now < _VPN_NEXT:
@@ -417,7 +418,9 @@ def get_vpn_status() -> bool:
     _VPN_CACHE = False
     try:
         for name, stats in psutil.net_if_stats().items():
-            if stats.isup and any(p in name.lower() for p in ('tun', 'tap', 'vpn', 'wg')):
+            if not stats.isup:
+                continue
+            if 'pointopoint' in getattr(stats, 'flags', '') or any(p in name.lower() for p in _VPN_NAMES):
                 _VPN_CACHE = True
                 break
     except Exception:
