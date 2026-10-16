@@ -2,6 +2,8 @@
 
 [🇬🇧 English](README.md) | 🇫🇷 Français
 
+> Fork de [Xinyuan-LilyGO/T-Display-S3-Long](https://github.com/Xinyuan-LilyGO/T-Display-S3-Long) : les exemples et bibliothèques LilyGo d'origine sont conservés dans `examples/` et `lib/`, le moniteur NUC se trouve dans `examples/sys_monitor/` et `tools/`.
+
 Moniteur système graphique pour NUC AMD (Ryzen 9 7940HS + Radeon 780M) affiché sur un écran T-Display-S3-Long (ESP32-S3, 180×640 px portrait).
 
 Les métriques sont envoyées du NUC vers l'ESP32 via USB-Serial (CSV) par le script Python `tools/monitor_sender.py`. Un second écran, affiché d'un toucher ou avec le bouton BOOT, montre le top 12 des processus avec l'icône de leur appli (voir [Écran 2 — Top processus](#écran-2--top-processus)).
