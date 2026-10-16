@@ -5,7 +5,9 @@
 set -e
 
 SERVICE_NAME="nuc-monitor"
-SERVICE_FILE="$(dirname "$(realpath "$0")")/${SERVICE_NAME}.service"
+SCRIPT_DIR="$(dirname "$(realpath "$0")")"
+PROJECT_ROOT="$(dirname "${SCRIPT_DIR}")"
+SERVICE_FILE="${SCRIPT_DIR}/${SERVICE_NAME}.service"
 DEST="/etc/systemd/system/${SERVICE_NAME}.service"
 
 if [[ $EUID -ne 0 ]]; then
@@ -13,8 +15,17 @@ if [[ $EUID -ne 0 ]]; then
     exit 1
 fi
 
-echo "→ Copie du fichier service vers ${DEST}"
-cp "$SERVICE_FILE" "$DEST"
+# Le service tourne sous l'utilisateur qui a lancé sudo, jamais en root
+SVC_USER="${SUDO_USER:-}"
+if [[ -z "$SVC_USER" || "$SVC_USER" == "root" ]]; then
+    echo "Lancer ce script avec sudo depuis votre compte utilisateur (pas depuis root)."
+    exit 1
+fi
+SVC_GROUP="$(id -gn "$SVC_USER")"
+
+echo "→ Installation du service pour ${SVC_USER} (${PROJECT_ROOT}) vers ${DEST}"
+sed -e "s|@USER@|${SVC_USER}|g" -e "s|@GROUP@|${SVC_GROUP}|g" \
+    -e "s|@PROJECT_DIR@|${PROJECT_ROOT}|g" "$SERVICE_FILE" > "$DEST"
 chmod 644 "$DEST"
 
 echo "→ Rechargement de systemd"

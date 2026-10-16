@@ -132,7 +132,7 @@ examples/sys_monitor/
 tools/
 ├── monitor_sender.py       # Script Python NUC → ESP32
 ├── proc_top.py             # Top 12 processus + icônes d'applis (écran 2)
-├── nuc-monitor.service     # Fichier service systemd
+├── nuc-monitor.service     # Modèle de service systemd
 ├── install-autostart.sh    # Script d'installation autostart pour linux
 ├── dev-mode.sh             # Arrête/relance le service pour développement ESP32
 └── deploy.sh               # Déploiement complet : arrêt → flash → redémarrage service
@@ -220,7 +220,7 @@ La consommation à la prise est donc plus élevée que ce chiffre (non mesurée 
 
 Le 7940HS est prévu pour 35–54 W en continu ; la valeur exacte et les pointes autorisées sont réglées par le fabricant du NUC dans le BIOS.
 
-**Repli RAPL** : sans hwmon amdgpu, le script calcule la puissance à partir du compteur d'énergie RAPL (`/sys/class/powercap/intel-rapl:0/energy_uj`, domaine `package-0`, différence entre deux lectures). Ce compteur existe sur ce Ryzen (module `intel_rapl_msr`) mais n'est lisible que par root depuis les correctifs des attaques par canal auxiliaire Platypus (CVE-2020-8694 / CVE-2020-12912) : pour le service (`User=daniel`), il renvoie 0. Ne pas le rouvrir aux autres utilisateurs par une règle udev : PPT donne la même information sans affaiblir ce correctif.
+**Repli RAPL** : sans hwmon amdgpu, le script calcule la puissance à partir du compteur d'énergie RAPL (`/sys/class/powercap/intel-rapl:0/energy_uj`, domaine `package-0`, différence entre deux lectures). Ce compteur existe sur ce Ryzen (module `intel_rapl_msr`) mais n'est lisible que par root depuis les correctifs des attaques par canal auxiliaire Platypus (CVE-2020-8694 / CVE-2020-12912) : pour le service (qui tourne sous l'utilisateur de la session, pas root), il renvoie 0. Ne pas le rouvrir aux autres utilisateurs par une règle udev : PPT donne la même information sans affaiblir ce correctif.
 
 **Pas de séparation CPU / iGPU** : ce Ryzen (Phoenix, SMU 13.0.4) n'a aucun capteur de puissance propre à l'iGPU. Le fichier `gpu_metrics` d'amdgpu publie la puissance par cœur (`CorePower[8]`) et deux rails : `VDDCR_VDD`, que le pilote range dans le champ `average_gfx_power` malgré son nom, et qui suit en fait la charge CPU (55 W sous une charge purement CPU, à peine plus que la somme des cœurs avec l'iGPU chargé) : ce n'est pas la puissance de l'iGPU ; et `VDDCR_SOC` (~1–2 W). « Total − cœurs » ne donnerait qu'une approximation (iGPU + L3 + SoC, ~5 W même au repos) : le total est donc affiché tel quel, sous l'arc CPU. En jeu ou en vidéo, il peut monter alors que le % CPU reste bas, parce que c'est l'iGPU qui consomme.
 
@@ -272,6 +272,37 @@ Si un VPN n'est pas reconnu, ajouter un motif de son nom d'interface dans `_VPN_
 
 ## Installation
 
+### Prérequis (démarrage rapide)
+
+Testé sur Zorin OS 18 (base Ubuntu 24.04). Les étapes suivent celles du dépôt LilyGo d'origine, adaptées à Linux et à ce projet.
+
+1. **Matériel** : une T-Display-S3-Long révision CST3530 (voir [Révisions du tactile](#révisions-du-tactile)) et un câble USB-C qui transporte les données (pas un câble de charge seule).
+2. **Paquets de base** : `python3-venv` est nécessaire à l'installateur de PlatformIO.
+   ```bash
+   sudo apt install git python3-venv
+   ```
+3. **Accès au port série** (flash et service) : ajouter son compte au groupe `dialout`, puis se déconnecter et se reconnecter.
+   ```bash
+   sudo usermod -aG dialout $USER
+   ```
+4. **VS Code** : installer [Visual Studio Code](https://code.visualstudio.com/) (paquet `.deb`) ou `sudo snap install code --classic`.
+5. **Extension PlatformIO IDE** : dans VS Code, onglet Extensions, chercher `PlatformIO IDE`, l'installer puis redémarrer VS Code. Elle installe PlatformIO Core dans `~/.platformio`, le chemin qu'utilise `tools/deploy.sh`.
+6. **Cloner le projet** puis l'ouvrir dans VS Code (`Fichier` → `Ouvrir le dossier...`).
+   ```bash
+   git clone https://github.com/DDevfr/T-Display-S3-Long.git
+   ```
+7. **Premier chargement** : PlatformIO télécharge la plateforme `espressif32` et la chaîne Arduino-ESP32 (plusieurs minutes, une seule fois). LVGL et le pilote tactile sont déjà dans `lib/` : aucune bibliothèque à installer (versions dans [Environnement de build testé](#environnement-de-build-testé)).
+8. **Compiler et flasher** : `sys_monitor` est déjà l'environnement par défaut de `platformio.ini` (pas de ligne à décommenter, contrairement au dépôt LilyGo). Brancher la carte, puis cliquer en bas à gauche sur ✔ (compiler), → (flasher) et 🔌 (moniteur série). Si le flash échoue, voir [Problèmes courants](#problèmes-courants).
+9. **Côté NUC** : installer les [dépendances Python](#dépendances-python-nuc), tester le script à la main ([Lancer manuellement](#lancer-manuellement)), puis installer le [démarrage automatique](#démarrage-automatique-zorin-os-18--systemd).
+
+Sans VS Code, PlatformIO Core s'installe seul en ligne de commande, au même endroit (`~/.platformio/penv`) :
+```bash
+curl -fsSL -o get-platformio.py https://raw.githubusercontent.com/platformio/platformio-core-installer/master/get-platformio.py
+python3 get-platformio.py
+```
+
+L'Arduino IDE n'est pas pris en charge : le projet n'est testé qu'avec PlatformIO.
+
 ### Dépendances Python (NUC)
 
 ```bash
@@ -297,7 +328,7 @@ Le script effectue un preflight check au démarrage (port, CPU/GPU/SSD temp, san
 sudo bash tools/install-autostart.sh
 ```
 
-Le script installe un service systemd qui démarre `monitor_sender.py` automatiquement au boot et le relance en cas d'erreur.
+Le script installe un service systemd qui démarre `monitor_sender.py` automatiquement au boot et le relance en cas d'erreur. Le service tourne sous le compte qui a lancé `sudo` (jamais root) et pointe vers l'emplacement du clone : `tools/nuc-monitor.service` est un modèle, dont les marqueurs `@USER@`, `@GROUP@` et `@PROJECT_DIR@` sont remplis par `install-autostart.sh` et `deploy.sh`.
 
 Commandes utiles après installation :
 ```bash
@@ -481,7 +512,7 @@ Les trames `CPU:` (0,25 s), `P:` (1 s) et `I:` (à la demande) ne se gênent pas
 - **Pas de débit SSD2** : le pont USB-SATA ASMedia ASM235C (driver `uas`, `/dev/sdc`) ne met pas à jour `/proc/diskstats` pour les lectures — seules les écritures fsync'd sont comptabilisées avec délai. La gauge SSD2 a été supprimée et `S2RD`/`S2WR` ne sont plus transmis ; seuls santé, température et capacité SSD2 sont affichés (ligne partagée avec les mises à jour, visible quand `UPD == 0`).
 - **Détection SSD** : `_detect_ssd_devices()` filtre les périphériques avec `taille ≥ 1 GB` pour exclure les gadgets USB 0-octet (sda/sdb exposés par l'ESP32 en mass-storage). Le NVMe est toujours sélectionné en premier.
 - **Intervalle polling Python** : 0.25 s par défaut dans `monitor_sender.py`. Configurable via `--interval`.
-- **Veille de l'écran ESP32** : le script lit toutes les secondes `PowerSaveMode` de `org.gnome.Mutter.DisplayConfig` sur le bus D-Bus de session (`/run/user/<uid>/bus`, accessible au service car il tourne en `User=daniel`) — c'est l'état DPMS réel de l'écran du NUC (0 = allumé, 3 = éteint), qui s'éteint après le délai GNOME « Écran noir » (`org.gnome.desktop.session idle-delay`, 600 s ici). `--sleep-delay` s après l'extinction (600 s par défaut, soit ~20 min d'inactivité au total), le script envoie `SCR:0` : l'ESP32 coupe le rétroéclairage, met l'AXS15231B en veille (`0x28` + `0x10`) et arrête le rendu LVGL (les données continuent d'être reçues et appliquées). Dès que souris/clavier rallument l'écran du NUC (y compris sur l'écran de verrouillage), `SCR:1` est envoyé immédiatement → réveil en ≤ 1 s (`0x11`, 120 ms, `0x29` + redessin complet). `ScreenSaver.Active` n'est pas utilisé car il reste vrai tant que l'écran de verrouillage est affiché. Sans session GNOME (boot, greeter), l'état est inconnu et l'écran reste allumé ; si le PC ne transmet plus rien pendant 5 s, l'ESP32 se réveille pour afficher « En attente du PC... ». Pendant la veille, l'ESP32 reste actif (pas de deep/light sleep) car il doit continuer à écouter l'USB CDC. Test rapide : `python tools/monitor_sender.py --sleep-delay 10` puis `xset dpms force off`.
+- **Veille de l'écran ESP32** : le script lit toutes les secondes `PowerSaveMode` de `org.gnome.Mutter.DisplayConfig` sur le bus D-Bus de session (`/run/user/<uid>/bus`, accessible au service car il tourne sous l'utilisateur de la session) — c'est l'état DPMS réel de l'écran du NUC (0 = allumé, 3 = éteint), qui s'éteint après le délai GNOME « Écran noir » (`org.gnome.desktop.session idle-delay`, 600 s ici). `--sleep-delay` s après l'extinction (600 s par défaut, soit ~20 min d'inactivité au total), le script envoie `SCR:0` : l'ESP32 coupe le rétroéclairage, met l'AXS15231B en veille (`0x28` + `0x10`) et arrête le rendu LVGL (les données continuent d'être reçues et appliquées). Dès que souris/clavier rallument l'écran du NUC (y compris sur l'écran de verrouillage), `SCR:1` est envoyé immédiatement → réveil en ≤ 1 s (`0x11`, 120 ms, `0x29` + redessin complet). `ScreenSaver.Active` n'est pas utilisé car il reste vrai tant que l'écran de verrouillage est affiché. Sans session GNOME (boot, greeter), l'état est inconnu et l'écran reste allumé ; si le PC ne transmet plus rien pendant 5 s, l'ESP32 se réveille pour afficher « En attente du PC... ». Pendant la veille, l'ESP32 reste actif (pas de deep/light sleep) car il doit continuer à écouter l'USB CDC. Test rapide : `python tools/monitor_sender.py --sleep-delay 10` puis `xset dpms force off`.
 - **Piles souris / clavier** : lues via `org.freedesktop.UPower` sur le bus D-Bus système (`EnumerateDevices` puis propriétés `Percentage`, `State`, `Model`, `Type`), sans root — UPower agrège déjà le récepteur Logitech HID++ (souris MX Anywhere 3S, `hidpp_battery_*`) et BlueZ (clavier K780 en Bluetooth). Seuls les périphériques `PowerSupply == false` et `IsPresent == true` sont gardés. UPower déclare **les deux** en `Type = 6` (keyboard), d'où un classement par nom de modèle (`keyboard|clavier|K###` → clavier, `mouse|souris|MX Anywhere/Master/Vertical|M###` → souris), le `Type` ne servant que de repli. Lecture throttlée à 1×/60 s (`_PERIPH_BAT_INTERVAL`). Côté écran, deux colonnes de part et d'autre de l'arc GPU (`KB` à gauche, `MS` à droite) : icône pile LVGL (`LV_SYMBOL_BATTERY_FULL/3/2/1/EMPTY`, ou `LV_SYMBOL_CHARGE` en charge) + %, colorés en vert (≥ 60 %), jaune (≥ 35 %), orange (≥ 15 %) ou rouge (< 15 %). Le % du clavier Bluetooth est celui mémorisé par BlueZ : il n'est mis à jour que lorsque le clavier le transmet (peu fréquent), et reste affiché même clavier éteint.
 
 ---

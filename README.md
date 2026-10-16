@@ -134,7 +134,7 @@ examples/sys_monitor/
 tools/
 ├── monitor_sender.py       # Python script NUC → ESP32
 ├── proc_top.py             # Top 12 processes + app icons (screen 2)
-├── nuc-monitor.service     # systemd service file
+├── nuc-monitor.service     # systemd service template
 ├── install-autostart.sh    # Autostart install script for Linux
 ├── dev-mode.sh             # Stops/restarts the service for ESP32 development
 └── deploy.sh               # Full deployment: stop → flash → restart service
@@ -222,7 +222,7 @@ Power drawn at the wall is therefore higher than this figure (not measured here)
 
 The 7940HS is rated for 35–54 W sustained; the exact value and allowed peaks are set by the NUC maker in the BIOS.
 
-**RAPL fallback**: without the amdgpu hwmon, the script computes power from the RAPL energy counter (`/sys/class/powercap/intel-rapl:0/energy_uj`, `package-0` domain, difference between two reads). This counter exists on this Ryzen (`intel_rapl_msr` module) but is only readable by root since the fixes for the Platypus side-channel attacks (CVE-2020-8694 / CVE-2020-12912): for the service (`User=daniel`), it returns 0. Do not reopen it to other users with a udev rule: PPT gives the same information without weakening that fix.
+**RAPL fallback**: without the amdgpu hwmon, the script computes power from the RAPL energy counter (`/sys/class/powercap/intel-rapl:0/energy_uj`, `package-0` domain, difference between two reads). This counter exists on this Ryzen (`intel_rapl_msr` module) but is only readable by root since the fixes for the Platypus side-channel attacks (CVE-2020-8694 / CVE-2020-12912): for the service (which runs as the session user, not root), it returns 0. Do not reopen it to other users with a udev rule: PPT gives the same information without weakening that fix.
 
 **No CPU / iGPU split**: this Ryzen (Phoenix, SMU 13.0.4) has no power sensor of its own for the iGPU. amdgpu's `gpu_metrics` file publishes per-core power (`CorePower[8]`) and two rails: `VDDCR_VDD`, which the driver puts in the `average_gfx_power` field despite its name and which actually follows CPU load (55 W under a pure CPU load, barely more than the sum of the cores with the iGPU loaded), so it is not the iGPU power; and `VDDCR_SOC` (~1–2 W). "Total − cores" would only give an approximation (iGPU + L3 + SoC, ~5 W even at idle): the total is therefore shown as is, under the CPU arc. In games or video, it can rise while CPU % stays low, because the iGPU is what draws the power.
 
@@ -274,6 +274,37 @@ If a VPN is not recognized, add a pattern of its interface name to `_VPN_NAMES`.
 
 ## Installation
 
+### Prerequisites (quick start)
+
+Tested on Zorin OS 18 (Ubuntu 24.04 base). The steps follow those of the original LilyGo repository, adapted to Linux and to this project.
+
+1. **Hardware**: a T-Display-S3-Long, CST3530 revision (see [Touch revisions](#touch-revisions)), and a USB-C cable that carries data (not a charge-only cable).
+2. **Base packages**: `python3-venv` is required by the PlatformIO installer.
+   ```bash
+   sudo apt install git python3-venv
+   ```
+3. **Serial port access** (flashing and service): add your account to the `dialout` group, then log out and back in.
+   ```bash
+   sudo usermod -aG dialout $USER
+   ```
+4. **VS Code**: install [Visual Studio Code](https://code.visualstudio.com/) (`.deb` package) or `sudo snap install code --classic`.
+5. **PlatformIO IDE extension**: in VS Code, Extensions tab, search for `PlatformIO IDE`, install it, then restart VS Code. It installs PlatformIO Core in `~/.platformio`, the path used by `tools/deploy.sh`.
+6. **Clone the project**, then open it in VS Code (`File` → `Open Folder...`).
+   ```bash
+   git clone https://github.com/DDevfr/T-Display-S3-Long.git
+   ```
+7. **First load**: PlatformIO downloads the `espressif32` platform and the Arduino-ESP32 toolchain (several minutes, only once). LVGL and the touch driver are already in `lib/`: no library to install (versions in [Tested build environment](#tested-build-environment)).
+8. **Build and flash**: `sys_monitor` is already the default environment in `platformio.ini` (no line to uncomment, unlike the LilyGo repository). Plug in the board, then click ✔ (build), → (upload) and 🔌 (serial monitor) at the bottom left. If flashing fails, see [Troubleshooting](#troubleshooting).
+9. **On the NUC**: install the [Python dependencies](#python-dependencies-nuc), test the script by hand ([Run manually](#run-manually)), then install the [autostart](#autostart-zorin-os-18--systemd).
+
+Without VS Code, PlatformIO Core can be installed on its own from the command line, in the same place (`~/.platformio/penv`):
+```bash
+curl -fsSL -o get-platformio.py https://raw.githubusercontent.com/platformio/platformio-core-installer/master/get-platformio.py
+python3 get-platformio.py
+```
+
+The Arduino IDE is not supported: the project is only tested with PlatformIO.
+
 ### Python dependencies (NUC)
 
 ```bash
@@ -299,7 +330,7 @@ The script runs a preflight check at startup (port, CPU/GPU/SSD temp, SMART heal
 sudo bash tools/install-autostart.sh
 ```
 
-The script installs a systemd service that starts `monitor_sender.py` automatically at boot and restarts it on error.
+The script installs a systemd service that starts `monitor_sender.py` automatically at boot and restarts it on error. The service runs as the account that ran `sudo` (never root) and points to the location of the clone: `tools/nuc-monitor.service` is a template whose `@USER@`, `@GROUP@` and `@PROJECT_DIR@` markers are filled in by `install-autostart.sh` and `deploy.sh`.
 
 Useful commands after installation:
 ```bash
@@ -483,7 +514,7 @@ The `CPU:` (0.25 s), `P:` (1 s) and `I:` (on request) frames do not interfere:
 - **No SSD2 throughput**: the ASMedia ASM235C USB-SATA bridge (`uas` driver, `/dev/sdc`) does not update `/proc/diskstats` for reads; only fsync'd writes are counted, with a delay. The SSD2 gauge was removed and `S2RD`/`S2WR` are no longer sent; only SSD2 health, temperature and capacity are shown (line shared with updates, visible when `UPD == 0`).
 - **SSD detection**: `_detect_ssd_devices()` keeps devices with `size ≥ 1 GB` to exclude 0-byte USB gadgets (sda/sdb exposed by the ESP32 as mass storage). The NVMe is always picked first.
 - **Python polling interval**: 0.25 s by default in `monitor_sender.py`. Configurable with `--interval`.
-- **ESP32 screen standby**: every second, the script reads `PowerSaveMode` of `org.gnome.Mutter.DisplayConfig` on the session D-Bus (`/run/user/<uid>/bus`, reachable by the service because it runs as `User=daniel`): this is the real DPMS state of the NUC's screen (0 = on, 3 = off), which turns off after the GNOME "Blank screen" delay (`org.gnome.desktop.session idle-delay`, 600 s here). `--sleep-delay` s after it turns off (600 s by default, i.e. ~20 min of total inactivity), the script sends `SCR:0`: the ESP32 turns off the backlight, puts the AXS15231B to sleep (`0x28` + `0x10`) and stops LVGL rendering (data is still received and applied). As soon as mouse/keyboard turn the NUC's screen back on (including on the lock screen), `SCR:1` is sent immediately → wake-up in ≤ 1 s (`0x11`, 120 ms, `0x29` + full redraw). `ScreenSaver.Active` is not used because it stays true while the lock screen is shown. Without a GNOME session (boot, greeter), the state is unknown and the screen stays on; if the PC sends nothing for 5 s, the ESP32 wakes up to show "En attente du PC..." (waiting for the PC). During standby, the ESP32 stays awake (no deep/light sleep) because it must keep listening on USB CDC. Quick test: `python tools/monitor_sender.py --sleep-delay 10` then `xset dpms force off`.
+- **ESP32 screen standby**: every second, the script reads `PowerSaveMode` of `org.gnome.Mutter.DisplayConfig` on the session D-Bus (`/run/user/<uid>/bus`, reachable by the service because it runs as the session user): this is the real DPMS state of the NUC's screen (0 = on, 3 = off), which turns off after the GNOME "Blank screen" delay (`org.gnome.desktop.session idle-delay`, 600 s here). `--sleep-delay` s after it turns off (600 s by default, i.e. ~20 min of total inactivity), the script sends `SCR:0`: the ESP32 turns off the backlight, puts the AXS15231B to sleep (`0x28` + `0x10`) and stops LVGL rendering (data is still received and applied). As soon as mouse/keyboard turn the NUC's screen back on (including on the lock screen), `SCR:1` is sent immediately → wake-up in ≤ 1 s (`0x11`, 120 ms, `0x29` + full redraw). `ScreenSaver.Active` is not used because it stays true while the lock screen is shown. Without a GNOME session (boot, greeter), the state is unknown and the screen stays on; if the PC sends nothing for 5 s, the ESP32 wakes up to show "En attente du PC..." (waiting for the PC). During standby, the ESP32 stays awake (no deep/light sleep) because it must keep listening on USB CDC. Quick test: `python tools/monitor_sender.py --sleep-delay 10` then `xset dpms force off`.
 - **Mouse / keyboard batteries**: read via `org.freedesktop.UPower` on the system D-Bus (`EnumerateDevices` then the `Percentage`, `State`, `Model`, `Type` properties), without root: UPower already aggregates the Logitech HID++ receiver (MX Anywhere 3S mouse, `hidpp_battery_*`) and BlueZ (K780 keyboard over Bluetooth). Only devices with `PowerSupply == false` and `IsPresent == true` are kept. UPower reports **both** as `Type = 6` (keyboard), hence sorting by model name (`keyboard|clavier|K###` → keyboard, `mouse|souris|MX Anywhere/Master/Vertical|M###` → mouse), `Type` only being a fallback. Read throttled to 1×/60 s (`_PERIPH_BAT_INTERVAL`). On screen, two columns on either side of the GPU arc (`KB` on the left, `MS` on the right): LVGL battery icon (`LV_SYMBOL_BATTERY_FULL/3/2/1/EMPTY`, or `LV_SYMBOL_CHARGE` when charging) + %, colored green (≥ 60 %), yellow (≥ 35 %), orange (≥ 15 %) or red (< 15 %). The Bluetooth keyboard % is the one stored by BlueZ: it is only updated when the keyboard sends it (infrequently), and stays shown even with the keyboard off.
 
 ---

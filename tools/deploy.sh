@@ -14,6 +14,17 @@ SERVICE_SRC="${SCRIPT_DIR}/${SERVICE_NAME}.service"
 SERVICE_DEST="/etc/systemd/system/${SERVICE_NAME}.service"
 PIO="${HOME}/.platformio/penv/bin/pio"
 
+if [[ $EUID -eq 0 ]]; then
+    echo "Lancer ce script sans sudo (il le demande lui-même) : bash $0"
+    exit 1
+fi
+
+# Fichier service rendu pour l'utilisateur courant et l'emplacement du clone
+SERVICE_RENDERED="$(mktemp)"
+trap 'rm -f "${SERVICE_RENDERED}"' EXIT
+sed -e "s|@USER@|$(id -un)|g" -e "s|@GROUP@|$(id -gn)|g" \
+    -e "s|@PROJECT_DIR@|${PROJECT_ROOT}|g" "${SERVICE_SRC}" > "${SERVICE_RENDERED}"
+
 FLASH=true
 if [[ "${1:-}" == "--no-flash" ]]; then
     FLASH=false
@@ -21,7 +32,7 @@ fi
 
 # ── 1. Arrêt du service ───────────────────────────────────────────────────────
 echo "▶ Arrêt de ${SERVICE_NAME}..."
-sudo systemctl stop "${SERVICE_NAME}"
+sudo systemctl stop "${SERVICE_NAME}" 2>/dev/null || true   # absent au premier déploiement
 
 # Attendre que le port série soit libéré (max 3 s)
 for i in 1 2 3; do
@@ -41,15 +52,15 @@ fi
 
 # ── 3. Mise à jour du fichier service si modifié ─────────────────────────────
 if [[ -f "${SERVICE_DEST}" ]]; then
-    if ! diff -q "${SERVICE_SRC}" "${SERVICE_DEST}" &>/dev/null; then
+    if ! diff -q "${SERVICE_RENDERED}" "${SERVICE_DEST}" &>/dev/null; then
         echo "▶ Fichier service modifié → mise à jour systemd..."
-        sudo cp "${SERVICE_SRC}" "${SERVICE_DEST}"
+        sudo cp "${SERVICE_RENDERED}" "${SERVICE_DEST}"
         sudo chmod 644 "${SERVICE_DEST}"
         sudo systemctl daemon-reload
     fi
 else
     echo "▶ Service non encore installé → installation..."
-    sudo cp "${SERVICE_SRC}" "${SERVICE_DEST}"
+    sudo cp "${SERVICE_RENDERED}" "${SERVICE_DEST}"
     sudo chmod 644 "${SERVICE_DEST}"
     sudo systemctl daemon-reload
     sudo systemctl enable "${SERVICE_NAME}"
