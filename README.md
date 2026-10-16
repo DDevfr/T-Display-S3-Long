@@ -6,6 +6,13 @@ Graphical system monitor for an AMD NUC (Ryzen 9 7940HS + Radeon 780M), shown on
 
 Metrics are sent from the NUC to the ESP32 over USB-Serial (CSV) by the Python script `tools/monitor_sender.py`. A second screen, opened with a touch or the BOOT button, shows the top 12 processes with their app icon (see [Screen 2 — Top processes](#screen-2--top-processes)).
 
+<p align="center">
+  <img src="images/screen-main.jpg" alt="Screen 1: system metrics (CPU, cores, GPU, RAM, SSD)" width="220">
+  &nbsp;&nbsp;
+  <img src="images/screen-top-processes.jpg" alt="Screen 2: top 12 processes with app icons" width="220">
+</p>
+<p align="center"><em>Screen 1: system metrics · Screen 2: top processes</em></p>
+
 > The on-screen texts of the firmware (`En attente du PC...`, `N maj disponibles`…) are in French; they are quoted as-is below.
 
 ---

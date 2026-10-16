@@ -6,6 +6,13 @@ Moniteur système graphique pour NUC AMD (Ryzen 9 7940HS + Radeon 780M) affiché
 
 Les métriques sont envoyées du NUC vers l'ESP32 via USB-Serial (CSV) par le script Python `tools/monitor_sender.py`. Un second écran, affiché d'un toucher ou avec le bouton BOOT, montre le top 12 des processus avec l'icône de leur appli (voir [Écran 2 — Top processus](#écran-2--top-processus)).
 
+<p align="center">
+  <img src="images/screen-main.jpg" alt="Écran 1 : métriques système (CPU, cœurs, GPU, RAM, SSD)" width="220">
+  &nbsp;&nbsp;
+  <img src="images/screen-top-processes.jpg" alt="Écran 2 : top 12 des processus avec l'icône de leur appli" width="220">
+</p>
+<p align="center"><em>Écran 1 : métriques système · Écran 2 : top processus</em></p>
+
 ---
 
 ## Hardware
