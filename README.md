@@ -1,142 +1,146 @@
 # NUC Monitor — T-Display-S3-Long
 
-Moniteur système graphique pour NUC AMD (Ryzen 9 7940HS + Radeon 780M) affiché sur un écran T-Display-S3-Long (ESP32-S3, 180×640 px portrait).
+🇬🇧 English | [🇫🇷 Français](README.fr.md)
 
-Les métriques sont envoyées du NUC vers l'ESP32 via USB-Serial (CSV) par le script Python `tools/monitor_sender.py`. Un second écran, affiché d'un toucher ou avec le bouton BOOT, montre le top 12 des processus avec l'icône de leur appli (voir [Écran 2 — Top processus](#écran-2--top-processus)).
+Graphical system monitor for an AMD NUC (Ryzen 9 7940HS + Radeon 780M), shown on a T-Display-S3-Long screen (ESP32-S3, 180×640 px portrait).
+
+Metrics are sent from the NUC to the ESP32 over USB-Serial (CSV) by the Python script `tools/monitor_sender.py`. A second screen, opened with a touch or the BOOT button, shows the top 12 processes with their app icon (see [Screen 2 — Top processes](#screen-2--top-processes)).
+
+> The on-screen texts of the firmware (`En attente du PC...`, `N maj disponibles`…) are in French; they are quoted as-is below.
 
 ---
 
 ## Hardware
 
-### Carte
+### Board
 
-| Élément | Détail |
-|---------|--------|
-| Carte | LILYGO T-Display-S3-Long, révision datée du **20-06-2026** (tactile CST3530) |
-| SoC | ESP32-S3R8 : double cœur Xtensa LX7 à 240 MHz, 512 Ko de SRAM, Wi-Fi 2,4 GHz et Bluetooth LE |
-| PSRAM | 8 Mo OPI, intégrée au boîtier (le « R8 » de ESP32-S3R8) |
-| Flash | 16 Mo QIO à 80 MHz, partitionnée en `huge_app.csv` (3 Mo d'application) |
-| Écran | 180×640 px, contrôleur **AXS15231B** en QSPI à 32 MHz, rétroéclairage PWM |
-| Tactile | **CST3530** (Hynitron), I2C, puce séparée de l'écran |
-| Charge batterie | **BQ25896** (Texas Instruments), I2C `0x6A` |
-| USB | Type-C, USB-Serial-JTAG natif de l'ESP32-S3 (VID:PID `303A:1001`), vu en `/dev/ttyACM0` |
-| Boutons | BOOT (GPIO0, utilisé comme bascule d'écran) et RST |
+| Item | Detail |
+|------|--------|
+| Board | LILYGO T-Display-S3-Long, revision dated **2026-06-20** (CST3530 touch) |
+| SoC | ESP32-S3R8: dual-core Xtensa LX7 at 240 MHz, 512 KB SRAM, 2.4 GHz Wi-Fi and Bluetooth LE |
+| PSRAM | 8 MB OPI, in the package (the "R8" of ESP32-S3R8) |
+| Flash | 16 MB QIO at 80 MHz, partitioned as `huge_app.csv` (3 MB application) |
+| Display | 180×640 px, **AXS15231B** controller over QSPI at 32 MHz, PWM backlight |
+| Touch | **CST3530** (Hynitron), I2C, chip separate from the display |
+| Battery charger | **BQ25896** (Texas Instruments), I2C `0x6A` |
+| USB | Type-C, native ESP32-S3 USB-Serial-JTAG (VID:PID `303A:1001`), seen as `/dev/ttyACM0` |
+| Buttons | BOOT (GPIO0, used as screen toggle) and RST |
 
-### Brochage utilisé (`pins_config.h`)
+### Pinout used (`pins_config.h`)
 
-| Fonction | GPIO |
+| Function | GPIO |
 |----------|------|
-| Écran QSPI : CS / SCK | 12 / 17 |
-| Écran QSPI : D0 / D1 / D2 / D3 | 13 / 18 / 21 / 14 |
-| Écran : reset | 16 |
-| Rétroéclairage (LEDC canal 0, 5 kHz) | 1 |
-| I2C (tactile + BQ25896) : SDA / SCL | 15 / 10 |
-| Tactile : INT / reset | 11 / 2 |
-| Bouton BOOT | 0 |
+| Display QSPI: CS / SCK | 12 / 17 |
+| Display QSPI: D0 / D1 / D2 / D3 | 13 / 18 / 21 / 14 |
+| Display: reset | 16 |
+| Backlight (LEDC channel 0, 5 kHz) | 1 |
+| I2C (touch + BQ25896): SDA / SCL | 15 / 10 |
+| Touch: INT / reset | 11 / 2 |
+| BOOT button | 0 |
 
-### Révisions du tactile
+### Touch revisions
 
-LilyGo a changé de contrôleur tactile en cours de production, sans changer le nom de la carte. Le code de la nouvelle révision a été publié le 19-05-2026 :
+LilyGo changed the touch controller during production without renaming the board. The code for the new revision was published on 2026-05-19:
 
-| Révision | Contrôleur tactile | Adresse I2C | Reset tactile | Code LilyGo |
-|----------|--------------------|-------------|---------------|-------------|
-| Ancienne révision | Intégré à l'AXS15231B | `0x3B` | GPIO16 (partagé avec l'écran) | branche `master`, exemple `touch` |
-| Révision CST3530 (cette carte) | **CST3530** séparé | `0x58` (`0x5A` en bootloader) | **GPIO2** | branche `T-Display-S3-Long-cst3530`, exemple `cst3530_touch` |
+| Revision | Touch controller | I2C address | Touch reset | LilyGo code |
+|----------|------------------|-------------|-------------|-------------|
+| Old revision | Built into the AXS15231B | `0x3B` | GPIO16 (shared with the display) | `master` branch, `touch` example |
+| CST3530 revision (this board) | Separate **CST3530** | `0x58` (`0x5A` in bootloader) | **GPIO2** | `T-Display-S3-Long-cst3530` branch, `cst3530_touch` example |
 
-Ce projet ne gère que la révision CST3530. Les exemples LilyGo d'origine (`touch`, `factory`, `GFX_AXS15231B_Image`…) encore présents dans `examples/` visent l'ancienne révision : leur tactile ne répond pas sur cette carte, et le firmware `factory` d'origine reste bloqué (le bon pour cette carte est `factory-cst3530.bin`, dans la branche LilyGo `T-Display-S3-Long-cst3530`).
+This project only supports the CST3530 revision. The original LilyGo examples (`touch`, `factory`, `GFX_AXS15231B_Image`…) still in `examples/` target the old revision: their touch does not respond on this board, and the original `factory` firmware hangs (the right one for this board is `factory-cst3530.bin`, in the LilyGo `T-Display-S3-Long-cst3530` branch).
 
-La CST3530 de cette carte s'identifie ainsi au démarrage (messages `[HYN]` du pilote sur le port série) : `ictype:caca220e`, `fw_project_id:2601093`, firmware de la puce `fw_ver:1010001`.
+The CST3530 of this board identifies itself at boot (driver `[HYN]` messages on the serial port): `ictype:caca220e`, `fw_project_id:2601093`, chip firmware `fw_ver:1010001`.
 
-Elle est pilotée par le pilote Hynitron fourni par LilyGo (`lib/hyn_driver_for_esp32`), avec **`HYN_POWER_ON_UPDATA = 0`** dans `hyn_cfg.h`. Le pilote ne reprogramme donc jamais le firmware interne de la puce tactile : l'original ne peut pas être sauvegardé, et une mise à jour serait irréversible. Ne passer cette valeur à `1` qu'en connaissance de cause.
+It is driven by the Hynitron driver supplied by LilyGo (`lib/hyn_driver_for_esp32`), with **`HYN_POWER_ON_UPDATA = 0`** in `hyn_cfg.h`. The driver therefore never reflashes the touch chip's internal firmware: the original cannot be backed up, and an update would be irreversible. Only set this value to `1` if you know what you are doing.
 
-### Environnement de build testé
+### Tested build environment
 
-| Élément | Version |
-|---------|---------|
-| Plateforme PlatformIO | `espressif32` 7.0.1 (non figée dans `platformio.ini`) |
+| Item | Version |
+|------|---------|
+| PlatformIO platform | `espressif32` 7.0.1 (not pinned in `platformio.ini`) |
 | Framework | Arduino-ESP32 2.0.17 (ESP-IDF 4.4) |
-| LVGL | 8.3.0-dev, fournie dans `lib/lvgl` |
-| Pilote tactile | Hynitron V2.10 (20241111), fourni dans `lib/hyn_driver_for_esp32` |
+| LVGL | 8.3.0-dev, bundled in `lib/lvgl` |
+| Touch driver | Hynitron V2.10 (20241111), bundled in `lib/hyn_driver_for_esp32` |
 
-Le pilote Hynitron est écrit pour ESP-IDF 4.4 (ancien driver I2C, types FreeRTOS d'avant IDF 5) : passer à Arduino-ESP32 3.x demanderait de l'adapter. Il partage le port I2C 0 déjà installé par `Wire`, d'où le message `E (799) i2c: i2c driver install error` au démarrage, sans conséquence.
+The Hynitron driver is written for ESP-IDF 4.4 (legacy I2C driver, pre-IDF 5 FreeRTOS types): moving to Arduino-ESP32 3.x would require porting it. It shares I2C port 0, already installed by `Wire`, hence the harmless `E (799) i2c: i2c driver install error` message at boot.
 
 ---
 
-## Layout de l'écran
+## Screen layout
 
 ```
 ┌──────────────────────────────────────┐
-│ WifiSSID |||..                VPN ON │  ← ligne 1 : SSID + barres (font_12) | VPN (font_12)
-│ 512 KB/s                     14h 9m  │  ← ligne 2 : débit réseau (font_12) | uptime (font_12, `4j 16h9m` au-delà d'un jour)
-├──────────────────────────────────────┤  ← séparateur header / CPU
-│         Arc CPU  %  °C               │  ← CPU % (font_20) + °C, couleur dynamique
-│          3.2 GHz  45W                │  ← fréquence CPU + puissance du package (font_10, orange doux, centrées ; `45W` masqué si `CPWR = 0`)
-│     CPU  ·  Ryzen 9 7940HS           │  ← labels fixes (font_8)
+│ WifiSSID |||..                VPN ON │  ← line 1: SSID + bars (font_12) | VPN (font_12)
+│ 512 KB/s                     14h 9m  │  ← line 2: network throughput (font_12) | uptime (font_12, `4j 16h9m` beyond one day)
+├──────────────────────────────────────┤  ← header / CPU separator
+│         Arc CPU  %  °C               │  ← CPU % (font_20) + °C, dynamic color
+│          3.2 GHz  45W                │  ← CPU frequency + package power (font_10, soft orange, centered; `45W` hidden if `CPWR = 0`)
+│     CPU  ·  Ryzen 9 7940HS           │  ← fixed labels (font_8)
 ├──────────────────────────────────────┤
-│  Barres 16 cœurs (0-7 / 8-15)        │  ← 2 rangées × 8, numéros colorés sous chaque barre
+│  16 core bars (0-7 / 8-15)           │  ← 2 rows × 8, colored numbers under each bar
 ├──────────────────────────────────────┤
-│  KB      Arc GPU  %  °C       MS     │  ← GPU % + °C (Radeon 780M) ; piles clavier (gauche) / souris (droite)
-│ [▮▮▮]       GPU              [▮  ]   │  ← "GPU" + "Radeon 780M" dessous ; icône pile colorée
-│ 100%                          20%    │  ← % pile : vert ≥ 60, jaune ≥ 35, orange ≥ 15, rouge < 15
+│  KB      Arc GPU  %  °C       MS     │  ← GPU % + °C (Radeon 780M); keyboard (left) / mouse (right) batteries
+│ [▮▮▮]       GPU              [▮  ]   │  ← "GPU" + "Radeon 780M" below; colored battery icon
+│ 100%                          20%    │  ← battery %: green ≥ 60, yellow ≥ 35, orange ≥ 15, red < 15
 ├──────────────────────────────────────┤
-│ RAM          14/62 GB                │  ← Label gauche, valeur droite, barre dessous
+│ RAM          14/62 GB                │  ← label left, value right, bar below
 | [════════]                           |
-│ VRAM          1/8 GB                 │  ← Idem, VRAM iGPU
+│ VRAM          1/8 GB                 │  ← same, iGPU VRAM
 | [════════]                           |
 ├──────────────────────────────────────┤
-│ SSD1 100%  38°C          123/1832 GB │  ← Titre SSD1, santé SMART, temp. centrée, capa. droite
-│  R - W  [══════]             16 KB/s │  ← R et W en vert si actifs (> 512 KB/s), gauge centrée entre les 2 textes
-│ SSD2 100%   32°C           480/1863GB│  ← ligne partagée : SSD2 (santé+temp.+capa.) si UPD == 0, sinon nombre de maj disponibles
+│ SSD1 100%  38°C          123/1832 GB │  ← SSD1 title, SMART health, centered temp, capacity right
+│  R - W  [══════]             16 KB/s │  ← R and W green when active (> 512 KB/s), gauge centered between both texts
+│ SSD2 100%   32°C           480/1863GB│  ← shared line: SSD2 (health + temp + capacity) if UPD == 0, otherwise number of available updates
 │                                      │
-│      Zorin OS 18.1 (6.17.040)        │  ← ligne de statut (bas d'écran) : OSKV si connecté, sinon "En attente du PC..."
+│      Zorin OS 18.1 (6.17.040)        │  ← status line (bottom): OSKV when connected, otherwise "En attente du PC..." (waiting for the PC)
 └──────────────────────────────────────┘
 ```
 
-> La ligne SSD2 ci-dessus n'est visible que quand `UPD == 0` (aucune mise à jour dispo) — sinon cette même ligne affiche `N maj disponibles` (orange, centré). Si la santé SSD2 est indisponible (`S2HLTH = 255`) et qu'il n'y a pas de mise à jour, la ligne reste vide.
+> The SSD2 line above is only visible when `UPD == 0` (no update available); otherwise the same line shows `N maj disponibles` (N updates available, orange, centered). If SSD2 health is unavailable (`S2HLTH = 255`) and there is no update, the line stays empty.
 
-**Couleurs dynamiques** (tous les widgets) :
-- Pourcentage : < 50 % → vert · < 70 % → jaune · < 85 % → orange · ≥ 85 % → rouge
-- Température CPU/GPU : < 60 °C → vert · < 75 °C → jaune · < 85 °C → orange · ≥ 85 °C → rouge
-- Signal WiFi : ≥ 70 % → colore le SSID en vert · ≥ 40 % → orange · < 40 % → rouge
-- VPN : actif → vert · inactif → gris (compatible avec la plupart des VPN du marché, voir [Détection du VPN](#détection-du-vpn))
-- % CPU et GPU : affichés en bleu (`CLR_GPU`)
-- Fréquence + puissance CPU (`3.2 GHz  45W`) : orange doux fixe (`0xE0A060`), volontairement plus terne que l'orange des seuils (`0xFF8C00`) pour ne pas passer pour une alerte
-- Numéros de cœurs : colorés selon leur activité (même couleur que la barre, > 5 %)
-- Santé SMART SSD : ≥ 90 % → vert · ≥ 70 % → orange · < 70 % → rouge
+**Dynamic colors** (all widgets):
+- Percentage: < 50 % → green · < 70 % → yellow · < 85 % → orange · ≥ 85 % → red
+- CPU/GPU temperature: < 60 °C → green · < 75 °C → yellow · < 85 °C → orange · ≥ 85 °C → red
+- WiFi signal: ≥ 70 % → SSID in green · ≥ 40 % → orange · < 40 % → red
+- VPN: active → green · inactive → grey (compatible with most VPNs on the market, see [VPN detection](#vpn-detection))
+- CPU and GPU %: shown in blue (`CLR_GPU`)
+- CPU frequency + power (`3.2 GHz  45W`): fixed soft orange (`0xE0A060`), deliberately duller than the threshold orange (`0xFF8C00`) so it does not look like an alert
+- Core numbers: colored by activity (same color as the bar, > 5 %)
+- SSD SMART health: ≥ 90 % → green · ≥ 70 % → orange · < 70 % → red
 
 ---
 
-## Structure du projet
+## Project structure
 
 ```
 examples/sys_monitor/
-├── sys_monitor.ino     # Boucle principale (setup/loop)
-├── ui.h / ui.cpp       # Interface LVGL (init + update, écran 2 top processus)
-├── serial_parser.h     # Parser non-bloquant (trames CPU:, P:, I:)
-├── icon_cache.h / .cpp # Cache PSRAM des icônes d'applis (écran 2)
-├── touch_cst3530.h / .c # Enveloppe du pilote tactile Hynitron (CST3530)
-├── AXS15231B.h / .cpp  # Driver écran QSPI (DMA, veille lcd_sleep/lcd_wake)
-└── pins_config.h       # Brochage (écran, tactile, BOOT) et résolution
+├── sys_monitor.ino     # Main loop (setup/loop)
+├── ui.h / ui.cpp       # LVGL UI (init + update, screen 2 top processes)
+├── serial_parser.h     # Non-blocking parser (CPU:, P:, I: frames)
+├── icon_cache.h / .cpp # PSRAM cache of app icons (screen 2)
+├── touch_cst3530.h / .c # Wrapper around the Hynitron touch driver (CST3530)
+├── AXS15231B.h / .cpp  # QSPI display driver (DMA, lcd_sleep/lcd_wake standby)
+└── pins_config.h       # Pinout (display, touch, BOOT) and resolution
 
 tools/
-├── monitor_sender.py       # Script Python NUC → ESP32
-├── proc_top.py             # Top 12 processus + icônes d'applis (écran 2)
-├── nuc-monitor.service     # Fichier service systemd
-├── install-autostart.sh    # Script d'installation autostart pour linux
-├── dev-mode.sh             # Arrête/relance le service pour développement ESP32
-└── deploy.sh               # Déploiement complet : arrêt → flash → redémarrage service
+├── monitor_sender.py       # Python script NUC → ESP32
+├── proc_top.py             # Top 12 processes + app icons (screen 2)
+├── nuc-monitor.service     # systemd service file
+├── install-autostart.sh    # Autostart install script for Linux
+├── dev-mode.sh             # Stops/restarts the service for ESP32 development
+└── deploy.sh               # Full deployment: stop → flash → restart service
 
 lib/
-├── lv_conf.h              # Config LVGL (fonts activés)
+├── lv_conf.h              # LVGL config (enabled fonts)
 ├── lvgl/                  # LVGL 8.3
-└── hyn_driver_for_esp32/  # Pilote tactile Hynitron/LilyGo (HYN_POWER_ON_UPDATA = 0)
+└── hyn_driver_for_esp32/  # Hynitron/LilyGo touch driver (HYN_POWER_ON_UPDATA = 0)
 ```
 
-Les autres dossiers de `examples/` et de `lib/` (`Arduino_GFX`, `Arduino_DriveBus`, `XPowersLib`) viennent du dépôt LilyGo d'origine et ne servent pas à `sys_monitor`.
+The other folders of `examples/` and `lib/` (`Arduino_GFX`, `Arduino_DriveBus`, `XPowersLib`) come from the original LilyGo repository and are not used by `sys_monitor`.
 
 ---
 
-## Métriques envoyées (protocole CSV)
+## Metrics sent (CSV protocol)
 
 ```
 CPU:65,CTEMP:78,GPU:23,GTEMP:62,RAM:68,RTOT:62,
@@ -149,294 +153,294 @@ KBAT:100,KCHG:0,MBAT:20,MCHG:0,
 CX:55;12;8;6;4;3;2;1;78;45;12;8;5;3;2;1
 ```
 
-| Clé | Valeur |
-|-----|--------|
-| `CPU` | % utilisation CPU global (entier), moyenne des 16 threads de `CX` |
-| `CTEMP` | Température CPU °C (k10temp/Tctl, lu directement dans son fichier hwmon, entier) |
-| `GPU` | % utilisation GPU (gpu_busy_percent sysfs, entier) |
-| `GTEMP` | Température GPU °C (amdgpu/edge, entier) |
-| `RAM` | % RAM utilisée (entier) |
-| `RTOT` | RAM totale en GB (entier) |
-| `SREAD` / `SWRIT` | Débit SSD1 (NVMe) lecture/écriture en **KB/s** (entier, précision sub-MB/s) |
-| `STEMP` | Température SSD1 °C (sysfs nvme hwmon, entier) |
-| `SCAP` / `STOT` | Espace utilisé / total SSD1 en GB |
-| `SHLTH` | % de santé SMART SSD1 (`100 - percent_used`, via UDisks2/D-Bus, sans root). `255` = indisponible (pas de NVMe, ou D-Bus/UDisks2 absent) — non affiché sur l'écran dans ce cas |
-| `S2TMP` | Température SSD2 °C. Pas de sysfs hwmon pour ce pont USB-SATA : lue via UDisks2/D-Bus (`Drive.Ata.SmartTemperature`, sans root). `0` si indisponible |
-| `S2CAP` / `S2TOT` | Espace utilisé / total SSD2 en GB |
-| `S2HLTH` | Santé SSD2 : `100` (vert, sain) / `20` (rouge, WARN — `SmartFailing`, attribut en échec, ou secteur défectueux) / `255` = indisponible. Pas de % d'usure fiable sur ATA générique (contrairement au NVMe), d'où un statut binaire affiché en valeurs symboliques. Affiché sur la ligne des mises à jour, uniquement quand `UPD == 0` ; avec `255`, toute la ligne SSD2 est masquée |
-| `VUSED` / `VTOT` | VRAM utilisée / totale en MB (sysfs amdgpu) |
-| `WNAM` | SSID WiFi (max 8 chars, sanitisé), lu sur D-Bus NetworkManager toutes les 5 s |
-| `WSIG` | Qualité signal WiFi % (`AccessPoint.Strength` de NetworkManager, même valeur que `nmcli dev wifi`, rafraîchie toutes les 5 s) — colore le SSID et donne les 5 barres `\|\|\|..`, non affiché en chiffre |
-| `VPN` | VPN actif : 1 / inactif : 0 (interface UP point-à-point ou nommée tun/tap/wg/vpn/nord, vérifiée 1×/s, voir [Détection du VPN](#détection-du-vpn)) |
-| `NTOT` | Débit réseau total lissé en KB/s (upload + download, EMA α=0.25, interface WiFi) |
-| `CFRQ` | Fréquence CPU moyenne × 10 (ex: `32` = 3.2 GHz, moyenne des `scaling_cur_freq` des 16 threads) |
-| `CPWR` | Puissance du package APU en Watts (PPT amdgpu, sinon RAPL ; `0` = aucune source lisible → non affichée) |
-| `UPTS` | Uptime système en secondes (`time.time() − psutil.boot_time()`) |
-| `OSKV` | Nom OS + version + noyau tronqué, ex `Zorin OS 18.1 (6.17.040)` (max 40 chars, affiché sur la ligne du bas quand connecté) |
-| `UPD` | Nombre de mises à jour dispo (`/var/lib/update-notifier/updates-available`, rafraîchi ~1-2x/jour par `apt-daily.timer` — pas temps réel). Ligne orange affichée uniquement si > 0 |
-| `SCR` | État souhaité de l'écran ESP32 : `1` = allumé, `0` = veille (rétroéclairage coupé + AXS15231B en sleep). Absent → `1` |
-| `KBAT` / `MBAT` | % pile clavier / souris (UPower via D-Bus système, sans root, rafraîchi toutes les 60 s). `255` = absent → colonne vide. Classement par nom de modèle (`K780`, `MX Anywhere`…) car UPower déclare la souris HID++ Logitech en type *keyboard* |
-| `KCHG` / `MCHG` | `1` = périphérique en charge → icône éclair à la place de la pile |
-| `CX` | 16 valeurs % par cœur séparées par `;` (ex: `CX:55;12;8;...;1`) |
+| Key | Value |
+|-----|-------|
+| `CPU` | Overall CPU usage % (integer), average of the 16 threads of `CX` |
+| `CTEMP` | CPU temperature °C (k10temp/Tctl, read directly from its hwmon file, integer) |
+| `GPU` | GPU usage % (gpu_busy_percent sysfs, integer) |
+| `GTEMP` | GPU temperature °C (amdgpu/edge, integer) |
+| `RAM` | RAM used % (integer) |
+| `RTOT` | Total RAM in GB (integer) |
+| `SREAD` / `SWRIT` | SSD1 (NVMe) read/write throughput in **KB/s** (integer, sub-MB/s precision) |
+| `STEMP` | SSD1 temperature °C (nvme hwmon sysfs, integer) |
+| `SCAP` / `STOT` | SSD1 used / total space in GB |
+| `SHLTH` | SSD1 SMART health % (`100 - percent_used`, via UDisks2/D-Bus, no root). `255` = unavailable (no NVMe, or D-Bus/UDisks2 missing), not shown on screen in that case |
+| `S2TMP` | SSD2 temperature °C. No hwmon sysfs for this USB-SATA bridge: read via UDisks2/D-Bus (`Drive.Ata.SmartTemperature`, no root). `0` if unavailable |
+| `S2CAP` / `S2TOT` | SSD2 used / total space in GB |
+| `S2HLTH` | SSD2 health: `100` (green, healthy) / `20` (red, WARN: `SmartFailing`, failing attribute, or bad sector) / `255` = unavailable. No reliable wear % on generic ATA (unlike NVMe), hence a binary status sent as symbolic values. Shown on the updates line, only when `UPD == 0`; with `255`, the whole SSD2 line is hidden |
+| `VUSED` / `VTOT` | VRAM used / total in MB (amdgpu sysfs) |
+| `WNAM` | WiFi SSID (max 8 chars, sanitized), read from NetworkManager over D-Bus every 5 s |
+| `WSIG` | WiFi signal quality % (NetworkManager `AccessPoint.Strength`, same value as `nmcli dev wifi`, refreshed every 5 s): colors the SSID and drives the 5 bars `\|\|\|..`, not shown as a number |
+| `VPN` | VPN active: 1 / inactive: 0 (interface UP that is point-to-point or named tun/tap/wg/vpn/nord, checked 1×/s, see [VPN detection](#vpn-detection)) |
+| `NTOT` | Smoothed total network throughput in KB/s (upload + download, EMA α=0.25, WiFi interface) |
+| `CFRQ` | Average CPU frequency × 10 (e.g. `32` = 3.2 GHz, average of the 16 threads' `scaling_cur_freq`) |
+| `CPWR` | APU package power in watts (amdgpu PPT, otherwise RAPL; `0` = no readable source → hidden) |
+| `UPTS` | System uptime in seconds (`time.time() − psutil.boot_time()`) |
+| `OSKV` | OS name + version + shortened kernel, e.g. `Zorin OS 18.1 (6.17.040)` (max 40 chars, shown on the bottom line when connected) |
+| `UPD` | Number of available updates (`/var/lib/update-notifier/updates-available`, refreshed ~1-2×/day by `apt-daily.timer`, not real time). Orange line shown only if > 0 |
+| `SCR` | Requested ESP32 screen state: `1` = on, `0` = standby (backlight off + AXS15231B asleep). Missing → `1` |
+| `KBAT` / `MBAT` | Keyboard / mouse battery % (UPower via system D-Bus, no root, refreshed every 60 s). `255` = absent → empty column. Sorted by model name (`K780`, `MX Anywhere`…) because UPower reports the Logitech HID++ mouse as type *keyboard* |
+| `KCHG` / `MCHG` | `1` = device charging → lightning icon instead of the battery |
+| `CX` | 16 per-core % values separated by `;` (e.g. `CX:55;12;8;...;1`) |
 
-> **Note SSD2** : les débits SSD2 (`S2RD`/`S2WR`) ne sont plus envoyés — le pont USB-SATA ASMedia ASM235C (driver `uas`) ne remonte pas les lectures dans `/proc/diskstats`. Le firmware ne les lit plus. SSD2 n'apparaît qu'à travers `S2HLTH`/`S2TMP`/`S2CAP`/`S2TOT`, sur la ligne partagée avec les mises à jour.
+> **SSD2 note**: SSD2 throughput (`S2RD`/`S2WR`) is no longer sent: the ASMedia ASM235C USB-SATA bridge (`uas` driver) does not report reads in `/proc/diskstats`. The firmware no longer reads them. SSD2 only appears through `S2HLTH`/`S2TMP`/`S2CAP`/`S2TOT`, on the line shared with updates.
 
 ---
 
-## Mesure de la puissance (wattage)
+## Power measurement (wattage)
 
-Le chiffre `nnW` affiché à côté de la fréquence, sous l'arc CPU, est la **puissance du package APU** (PPT, *Package Power Tracking*) : la puce Ryzen 9 7940HS entière.
+The `nnW` figure next to the frequency, under the CPU arc, is the **APU package power** (PPT, *Package Power Tracking*): the whole Ryzen 9 7940HS chip.
 
-| Compté | Non compté |
-|--------|------------|
-| 8 cœurs Zen 4 (16 threads) et leur cache L3 | RAM (barrettes DDR5) |
-| iGPU Radeon 780M | SSD, WiFi, Ethernet, USB externes |
-| SoC : contrôleur mémoire, PCIe/USB, moteur d'affichage, NPU… | Ventilateur, régulateurs de la carte mère, bloc secteur |
+| Counted | Not counted |
+|---------|-------------|
+| 8 Zen 4 cores (16 threads) and their L3 cache | RAM (DDR5 modules) |
+| Radeon 780M iGPU | SSD, WiFi, Ethernet, external USB |
+| SoC: memory controller, PCIe/USB, display engine, NPU… | Fan, motherboard regulators, power brick |
 
-La consommation à la prise est donc plus élevée que ce chiffre (non mesurée ici).
+Power drawn at the wall is therefore higher than this figure (not measured here).
 
-**Source** : `power1_average` du hwmon amdgpu (label `PPT`, ex. `/sys/class/drm/card1/device/hwmon/hwmon7/power1_average`, en µW, chemin résolu au démarrage), lisible sans root. C'est une estimation calculée par le SMU (le microcontrôleur de gestion d'énergie du Ryzen), qui s'en sert lui-même pour appliquer ses limites de puissance et décider des fréquences turbo. Le script la lit à chaque trame (0,25 s), l'arrondit au watt et l'envoie dans `CPWR`.
+**Source**: `power1_average` of the amdgpu hwmon (label `PPT`, e.g. `/sys/class/drm/card1/device/hwmon/hwmon7/power1_average`, in µW, path resolved at startup), readable without root. It is an estimate computed by the SMU (the Ryzen's power-management microcontroller), which uses it itself to enforce its power limits and pick boost frequencies. The script reads it on every frame (0.25 s), rounds it to the watt and sends it in `CPWR`.
 
-**Lissage** : la valeur est moyennée par le SMU sur ~1 à 2 s. Elle met environ 2 s à suivre un changement brusque de charge (montée de 5 à 55 W en ~2,5 s). `power1_input` (valeur instantanée) n'est pas utilisée : elle retombe parfois à 0 W en pleine charge.
+**Smoothing**: the SMU averages the value over ~1 to 2 s. It takes about 2 s to follow a sudden load change (5 to 55 W in ~2.5 s). `power1_input` (instantaneous value) is not used: it sometimes drops to 0 W under full load.
 
-**Ordres de grandeur mesurés sur ce NUC** :
+**Typical values measured on this NUC**:
 
 | Situation | `CPWR` |
 |-----------|--------|
-| Repos (bureau, écran allumé) | ~5–6 W |
-| 8 threads CPU saturés | ~55–58 W |
-| iGPU chargé (`glxgears` sans vsync, + CPU qui l'alimente) | ~50 W |
+| Idle (desktop, screen on) | ~5–6 W |
+| 8 CPU threads saturated | ~55–58 W |
+| iGPU loaded (`glxgears` without vsync, + the CPU feeding it) | ~50 W |
 
-Le 7940HS est prévu pour 35–54 W en continu ; la valeur exacte et les pointes autorisées sont réglées par le fabricant du NUC dans le BIOS.
+The 7940HS is rated for 35–54 W sustained; the exact value and allowed peaks are set by the NUC maker in the BIOS.
 
-**Repli RAPL** : sans hwmon amdgpu, le script calcule la puissance à partir du compteur d'énergie RAPL (`/sys/class/powercap/intel-rapl:0/energy_uj`, domaine `package-0`, différence entre deux lectures). Ce compteur existe sur ce Ryzen (module `intel_rapl_msr`) mais n'est lisible que par root depuis les correctifs des attaques par canal auxiliaire Platypus (CVE-2020-8694 / CVE-2020-12912) : pour le service (`User=daniel`), il renvoie 0. Ne pas le rouvrir aux autres utilisateurs par une règle udev : PPT donne la même information sans affaiblir ce correctif.
+**RAPL fallback**: without the amdgpu hwmon, the script computes power from the RAPL energy counter (`/sys/class/powercap/intel-rapl:0/energy_uj`, `package-0` domain, difference between two reads). This counter exists on this Ryzen (`intel_rapl_msr` module) but is only readable by root since the fixes for the Platypus side-channel attacks (CVE-2020-8694 / CVE-2020-12912): for the service (`User=daniel`), it returns 0. Do not reopen it to other users with a udev rule: PPT gives the same information without weakening that fix.
 
-**Pas de séparation CPU / iGPU** : ce Ryzen (Phoenix, SMU 13.0.4) n'a aucun capteur de puissance propre à l'iGPU. Le fichier `gpu_metrics` d'amdgpu publie la puissance par cœur (`CorePower[8]`) et deux rails : `VDDCR_VDD`, que le pilote range dans le champ `average_gfx_power` malgré son nom, et qui suit en fait la charge CPU (55 W sous une charge purement CPU, à peine plus que la somme des cœurs avec l'iGPU chargé) : ce n'est pas la puissance de l'iGPU ; et `VDDCR_SOC` (~1–2 W). « Total − cœurs » ne donnerait qu'une approximation (iGPU + L3 + SoC, ~5 W même au repos) : le total est donc affiché tel quel, sous l'arc CPU. En jeu ou en vidéo, il peut monter alors que le % CPU reste bas, parce que c'est l'iGPU qui consomme.
+**No CPU / iGPU split**: this Ryzen (Phoenix, SMU 13.0.4) has no power sensor of its own for the iGPU. amdgpu's `gpu_metrics` file publishes per-core power (`CorePower[8]`) and two rails: `VDDCR_VDD`, which the driver puts in the `average_gfx_power` field despite its name and which actually follows CPU load (55 W under a pure CPU load, barely more than the sum of the cores with the iGPU loaded), so it is not the iGPU power; and `VDDCR_SOC` (~1–2 W). "Total − cores" would only give an approximation (iGPU + L3 + SoC, ~5 W even at idle): the total is therefore shown as is, under the CPU arc. In games or video, it can rise while CPU % stays low, because the iGPU is what draws the power.
 
-**Vérifier à la main** :
+**Manual check**:
 ```bash
-cat /sys/class/drm/card*/device/hwmon/hwmon*/power1_label     # doit afficher PPT
-cat /sys/class/drm/card*/device/hwmon/hwmon*/power1_average   # µW (5100000 = 5,1 W)
-sensors 'amdgpu-pci-*'                                        # ligne « PPT: 22.17 W (avg = 6.02 W) » : c'est avg qui est affiché
-sudo journalctl -u nuc-monitor | grep Puissance               # source retenue au démarrage du service
+cat /sys/class/drm/card*/device/hwmon/hwmon*/power1_label     # should print PPT
+cat /sys/class/drm/card*/device/hwmon/hwmon*/power1_average   # µW (5100000 = 5.1 W)
+sensors 'amdgpu-pci-*'                                        # line "PPT: 22.17 W (avg = 6.02 W)": avg is what is shown
+sudo journalctl -u nuc-monitor | grep Puissance               # source picked when the service started
 ```
-Au démarrage, le preflight affiche `Puissance OK n W (<chemin>)`, ou `n/a` si ni PPT ni RAPL n'est lisible (l'écran n'affiche alors que la fréquence).
+At startup, the preflight prints `Puissance OK n W (<path>)`, or `n/a` if neither PPT nor RAPL is readable (the screen then only shows the frequency).
 
 ---
 
-## Détection du VPN
+## VPN detection
 
-L'indicateur `VPN` du bandeau est **compatible avec la plupart des VPN du marché** : il ne dépend ni du fournisseur ni de son application, mais de l'interface réseau que crée le tunnel.
+The `VPN` indicator in the header is **compatible with most VPNs on the market**: it depends neither on the provider nor on its app, but on the network interface the tunnel creates.
 
-**Règle** : le VPN est considéré actif dès qu'une interface réseau est UP et remplit l'une de ces conditions :
-- elle porte le flag `pointopoint` (lien point à point). C'est le cas des tunnels WireGuard et OpenVPN (mode tun), qui sont les deux technologies utilisées par la quasi-totalité des VPN grand public sous Linux ;
-- son nom contient `tun`, `tap`, `vpn`, `wg` ou `nord` (`_VPN_NAMES` dans `monitor_sender.py`). Ce filet couvre notamment OpenVPN en mode TAP, qui n'est pas point à point.
+**Rule**: the VPN is considered active as soon as a network interface is UP and meets one of these conditions:
+- it carries the `pointopoint` flag (point-to-point link). This is the case for WireGuard and OpenVPN (tun mode) tunnels, the two technologies used by nearly all consumer VPNs on Linux;
+- its name contains `tun`, `tap`, `vpn`, `wg` or `nord` (`_VPN_NAMES` in `monitor_sender.py`). This safety net notably covers OpenVPN in TAP mode, which is not point-to-point.
 
-Les interfaces du réseau local (Ethernet, WiFi, `lo`) et les ponts de Docker ou libvirt n'ont pas ce flag : ils ne déclenchent pas l'indicateur.
+Local network interfaces (Ethernet, WiFi, `lo`) and Docker or libvirt bridges do not have this flag: they do not trigger the indicator.
 
-| VPN / technologie | Interface typique | Détecté |
-|-------------------|-------------------|---------|
-| NordVPN, NordLynx (WireGuard) | `nordlynx` | ✅ testé (NordVPN 5.4.1) |
+| VPN / technology | Typical interface | Detected |
+|------------------|-------------------|----------|
+| NordVPN, NordLynx (WireGuard) | `nordlynx` | ✅ tested (NordVPN 5.4.1) |
 | NordVPN, OpenVPN | `nordtun` | ✅ |
-| Mullvad, Proton VPN, Surfshark, PIA, ExpressVPN, CyberGhost, Windscribe, IVPN… (WireGuard ou OpenVPN) | `wg0-mullvad`, `proton0`, `tun0`… | ✅ attendu, non testé |
-| WireGuard (`wg-quick`) ou OpenVPN configurés à la main ou dans NetworkManager | `wg0`, `tun0` | ✅ |
-| VPN d'entreprise via OpenConnect (Cisco AnyConnect, GlobalProtect, Pulse) | `tun0`, `vpn0` | ✅ |
+| Mullvad, Proton VPN, Surfshark, PIA, ExpressVPN, CyberGhost, Windscribe, IVPN… (WireGuard or OpenVPN) | `wg0-mullvad`, `proton0`, `tun0`… | ✅ expected, not tested |
+| WireGuard (`wg-quick`) or OpenVPN set up by hand or in NetworkManager | `wg0`, `tun0` | ✅ |
+| Corporate VPN via OpenConnect (Cisco AnyConnect, GlobalProtect, Pulse) | `tun0`, `vpn0` | ✅ |
 | FortiGate SSL-VPN (`openfortivpn`), L2TP | `ppp0` | ✅ |
-| OpenVPN en mode TAP | `tap0` | ✅ (par le nom) |
-| IPsec / IKEv2 natif (strongSwan, Libreswan) | aucune | ❌ ces VPN ne créent en général pas d'interface |
+| OpenVPN in TAP mode | `tap0` | ✅ (by name) |
+| Native IPsec / IKEv2 (strongSwan, Libreswan) | none | ❌ these VPNs usually do not create an interface |
 
-**Faux positifs connus** : une connexion PPPoE ou 4G (`ppp0`) et Tailscale (`tailscale0`) sont vues comme un VPN, même quand Tailscale ne sert pas de nœud de sortie. Ce cas ne se présente pas sur ce NUC.
+**Known false positives**: a PPPoE or 4G connection (`ppp0`) and Tailscale (`tailscale0`) are seen as a VPN, even when Tailscale is not used as an exit node. This does not happen on this NUC.
 
-**Coût** : aucun surcoût. Le script réutilise l'appel `net_if_stats()` (~0,14 ms) et n'ajoute qu'une comparaison de chaînes. Une détection par la route par défaut (`ip route get 1.1.1.1`), plus exacte, a été écartée : elle lance un processus à chaque test (~1,4 ms).
+**Cost**: no extra cost. The script reuses the `net_if_stats()` call (~0.14 ms) and only adds a string comparison. Detection through the default route (`ip route get 1.1.1.1`), more accurate, was ruled out: it spawns a process on every check (~1.4 ms).
 
-**Vérifier à la main** :
+**Manual check**:
 ```bash
-ip -br link                                                   # repérer l'interface du VPN (ex. nordlynx)
-python3 -c "import psutil; print({k: v.flags for k, v in psutil.net_if_stats().items()})"   # doit contenir pointopoint pour elle
-sudo journalctl -u nuc-monitor | grep VPN                     # ligne du preflight : « OK (actif) » ou « inactif »
+ip -br link                                                   # find the VPN interface (e.g. nordlynx)
+python3 -c "import psutil; print({k: v.flags for k, v in psutil.net_if_stats().items()})"   # should contain pointopoint for it
+sudo journalctl -u nuc-monitor | grep VPN                     # preflight line: "OK (actif)" or "inactif"
 ```
-Si un VPN n'est pas reconnu, ajouter un motif de son nom d'interface dans `_VPN_NAMES`.
+If a VPN is not recognized, add a pattern of its interface name to `_VPN_NAMES`.
 
 ---
 
 ## Installation
 
-### Dépendances Python (NUC)
+### Python dependencies (NUC)
 
 ```bash
-sudo apt install python3-psutil python3-serial   # le service tourne avec /usr/bin/python3 ; pip y est bloqué (PEP 668)
-sudo apt install python3-dbus   # optionnel (déjà présent sur Zorin) : WiFi, santé SMART SSD1/SSD2, veille écran ESP32, piles souris/clavier
-sudo apt install python3-pil python3-gi gir1.2-gdkpixbuf-2.0   # optionnel (déjà présents sur Zorin) : icônes de l'écran 2 (Pillow requis, GdkPixbuf pour les SVG)
+sudo apt install python3-psutil python3-serial   # the service runs with /usr/bin/python3; pip is blocked there (PEP 668)
+sudo apt install python3-dbus   # optional (already on Zorin): WiFi, SSD1/SSD2 SMART health, ESP32 screen standby, mouse/keyboard batteries
+sudo apt install python3-pil python3-gi gir1.2-gdkpixbuf-2.0   # optional (already on Zorin): screen 2 icons (Pillow required, GdkPixbuf for SVG)
 ```
 
-### Lancer manuellement
+### Run manually
 
 ```bash
-python tools/monitor_sender.py                     # auto-détecte /dev/ttyACM*
+python tools/monitor_sender.py                     # auto-detects /dev/ttyACM*
 python tools/monitor_sender.py --port /dev/ttyACM0
-python tools/monitor_sender.py --interval 0.25     # rafraîchissement 0.25 s (défaut)
-python tools/monitor_sender.py --sleep-delay 600   # veille ESP32 600 s après l'extinction de l'écran du NUC (défaut, 0 = jamais)
+python tools/monitor_sender.py --interval 0.25     # 0.25 s refresh (default)
+python tools/monitor_sender.py --sleep-delay 600   # ESP32 standby 600 s after the NUC screen turns off (default, 0 = never)
 ```
 
-Le script effectue un preflight check au démarrage (port, CPU/GPU/SSD temp, santé SMART, WiFi, VPN, RAM, VRAM, SSD, puissance, veille écran) et reconnecte automatiquement en cas de déconnexion USB.
+The script runs a preflight check at startup (port, CPU/GPU/SSD temp, SMART health, WiFi, VPN, RAM, VRAM, SSD, power, screen standby) and reconnects automatically after a USB disconnect.
 
-### Démarrage automatique (Zorin OS 18 / systemd)
+### Autostart (Zorin OS 18 / systemd)
 
 ```bash
 sudo bash tools/install-autostart.sh
 ```
 
-Le script installe un service systemd qui démarre `monitor_sender.py` automatiquement au boot et le relance en cas d'erreur.
+The script installs a systemd service that starts `monitor_sender.py` automatically at boot and restarts it on error.
 
-Commandes utiles après installation :
+Useful commands after installation:
 ```bash
-sudo systemctl status nuc-monitor      # état du service
-sudo systemctl stop   nuc-monitor      # arrêter
-sudo systemctl start  nuc-monitor      # démarrer
-sudo systemctl disable nuc-monitor     # désactiver l'autostart
-sudo journalctl -u nuc-monitor -f      # logs en direct
+sudo systemctl status nuc-monitor      # service status
+sudo systemctl stop   nuc-monitor      # stop
+sudo systemctl start  nuc-monitor      # start
+sudo systemctl disable nuc-monitor     # disable autostart
+sudo journalctl -u nuc-monitor -f      # live logs
 ```
 
-Pour désinstaller :
+To uninstall:
 ```bash
 sudo systemctl disable --now nuc-monitor
 sudo rm /etc/systemd/system/nuc-monitor.service
 sudo systemctl daemon-reload
 ```
 
-### Flash ESP32 (PlatformIO)
+### Flash the ESP32 (PlatformIO)
 
 ```bash
-~/.platformio/penv/bin/pio run -e sys_monitor -t upload   # pio n'est pas dans le PATH
+~/.platformio/penv/bin/pio run -e sys_monitor -t upload   # pio is not in the PATH
 ```
 
-L'environnement `sys_monitor` dans `platformio.ini` active `-DARDUINO_USB_CDC_ON_BOOT=1` pour que `Serial` utilise le CDC USB-JTAG (HWCDC) et non l'UART0.
+The `sys_monitor` environment in `platformio.ini` enables `-DARDUINO_USB_CDC_ON_BOOT=1` so that `Serial` uses the USB-JTAG CDC (HWCDC) and not UART0.
 
 ---
 
-## Cycle de développement
+## Development cycle
 
-### Déploiement rapide (cas normal)
+### Quick deployment (usual case)
 
 ```bash
-# Firmware modifié (ou firmware + Python) :
+# Firmware changed (or firmware + Python):
 bash tools/deploy.sh
 
-# Python uniquement (monitor_sender.py) — pas besoin de reflasher :
+# Python only (monitor_sender.py), no reflash needed:
 bash tools/deploy.sh --no-flash
 ```
 
-`deploy.sh` enchaîne automatiquement : arrêt du service → flash ESP32 (sauf avec
-`--no-flash`) → mise à jour du fichier service si modifié → redémarrage. Affiche
-le statut systemd à la fin.
+`deploy.sh` chains automatically: stop the service → flash the ESP32 (except with
+`--no-flash`) → update the service file if changed → restart. Shows the systemd
+status at the end.
 
-Utiliser `--no-flash` dès que seul `monitor_sender.py` (ou `nuc-monitor.service`)
-a changé : ça évite de recompiler/reflasher l'ESP32 pour rien, et redémarre le
-service avec le code Python à jour en quelques secondes.
+Use `--no-flash` whenever only `monitor_sender.py` (or `nuc-monitor.service`)
+changed: it avoids recompiling/reflashing the ESP32 for nothing, and restarts the
+service with the up-to-date Python code in a few seconds.
 
-### Développement interactif (test manuel du script Python)
+### Interactive development (manual test of the Python script)
 
 ```bash
-sudo bash tools/dev-mode.sh            # arrête le service, libère /dev/ttyACM0
-python3 tools/monitor_sender.py        # test manuel (Ctrl+C pour arrêter)
-sudo bash tools/dev-mode.sh resume     # relancer le service
+sudo bash tools/dev-mode.sh            # stops the service, frees /dev/ttyACM0
+python3 tools/monitor_sender.py        # manual test (Ctrl+C to stop)
+sudo bash tools/dev-mode.sh resume     # restart the service
 ```
 
-### Commandes utiles
+### Useful commands
 
 ```bash
-sudo systemctl status nuc-monitor      # état du service
-sudo journalctl -u nuc-monitor -f      # logs en direct
+sudo systemctl status nuc-monitor      # service status
+sudo journalctl -u nuc-monitor -f      # live logs
 ```
 
 ---
 
-## Écran 2 — Top processus
+## Screen 2 — Top processes
 
-Un **toucher de l'écran** ou un appui sur le **bouton BOOT** (GPIO0) bascule de l'écran principal vers le top 12 des processus ; un nouveau toucher ou appui revient à l'écran principal (pas de retour automatique). Appuyer sur BOOT pendant le fonctionnement ne fait que changer d'écran : il ne fait passer l'ESP32 en mode flash que s'il est maintenu pendant un appui sur RST. Chaque ligne : icône de l'appli (la même que dans le moniteur système GNOME) + nom du processus + %CPU façon `top` (100 % = un thread saturé, jusqu'à 1600 % sur les 16 threads), avec une barre de 4 px et la couleur `pct_color()`. Le titre rappelle le CPU global.
+A **touch on the screen** or a press on the **BOOT button** (GPIO0) switches from the main screen to the top 12 processes; another touch or press goes back to the main screen (no automatic return). Pressing BOOT while running only switches screens: it only puts the ESP32 in flash mode if held during a press on RST. Each line: app icon (the same as in the GNOME system monitor) + process name + `top`-style CPU % (100 % = one saturated thread, up to 1600 % over the 16 threads), with a 4 px bar and the `pct_color()` color. The title shows the overall CPU.
 
 ```
 ┌──────────────────────────────────────┐
 │ TOP CPU                     CPU 23%  │
 ├──────────────────────────────────────┤
-│ [ic]  code                    75%    │  ← icône 32×32 reçue du PC
+│ [ic]  code                    75%    │  ← 32×32 icon received from the PC
 │       ▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬                │
-│ [B ]  brave                   12%    │  ← pastille (initiale) tant que l'icône n'est pas arrivée
+│ [B ]  brave                   12%    │  ← badge (initial) until the icon has arrived
 │       ▬▬▬                            │
-│  …    12 lignes de 48 px             │
+│  …    12 lines of 48 px              │
 └──────────────────────────────────────┘
 ```
 
-### Échanges PC ↔ ESP32
+### PC ↔ ESP32 exchanges
 
-- **Le Python produit les données** : il ne sait pas quel écran est affiché et envoie le top processus en permanence.
-- **L'ESP32 affiche et bascule localement** : le toucher (ou le bouton BOOT) ne passe pas par le PC (bascule instantanée, écran 2 déjà à jour).
-- **Seul cas où l'ESP32 parle au PC** : il demande une icône qui lui manque.
+- **Python produces the data**: it does not know which screen is shown and sends the top processes all the time.
+- **The ESP32 displays and switches locally**: the touch (or the BOOT button) does not go through the PC (instant switch, screen 2 already up to date).
+- **The only case where the ESP32 talks to the PC**: it asks for an icon it is missing.
 
 ```
-      NUC (Python)                          câble USB                    ESP32
+      NUC (Python)                          USB cable                    ESP32
  ═════════════════════════                                  ═══════════════════════════
- ┌─ Boucle principale ─────┐
- │                         │   ① toutes les 0,25 s
- │  métriques système ─────┼──── CPU:45,CTEMP:62,...,CX:.. ──────►  Écran 1
- │                         │   ② toutes les 1 s (+0,125 s)
- │  top 12 processus ──────┼──── P:a1b2;153;firefox|c3d4;42;code|.. ►  garde le top 12
+ ┌─ Main loop ─────────────┐
+ │                         │   ① every 0.25 s
+ │  system metrics ────────┼──── CPU:45,CTEMP:62,...,CX:.. ──────►  Screen 1
+ │                         │   ② every 1 s (+0.125 s)
+ │  top 12 processes ──────┼──── P:a1b2;153;firefox|c3d4;42;code|.. ►  keeps the top 12
  │  (/proc)                │                                            │
- │                         │                                   icône a1b2 connue ?
- │                         │                                    ├─ oui → affichée
- │                         │                                    └─ non → pastille « F »
- │                         │   ③ demande d'icône                        │
- │  lit les demandes ◄─────┼──────────────── ?I:a1b2 ◄───────────────┘ (relance / 2 s)
- │        ▼                │   ④ icône en 8 morceaux
- │  file d'envoi ──────────┼──── I:a1b2;0..7;8;<base64> ──────────►  cache PSRAM (48)
- │  (max 1 icône / 100 ms) │                                         vérif hash → affichée
+ │                         │                                   icon a1b2 known?
+ │                         │                                    ├─ yes → shown
+ │                         │                                    └─ no → badge "F"
+ │                         │   ③ icon request                           │
+ │  reads requests ◄───────┼──────────────── ?I:a1b2 ◄───────────────┘ (retry / 2 s)
+ │        ▼                │   ④ icon in 8 chunks
+ │  send queue ────────────┼──── I:a1b2;0..7;8;<base64> ──────────►  PSRAM cache (48)
+ │  (max 1 icon / 100 ms)  │                                         hash check → shown
  └─────────▲───────────────┘
- ┌─ Thread séparé ─────────┐                                    ┌─────────────────┐
- │  processus → appli      │                                    │ TOUCHER / BOOT  │
- │  → icône du thème       │                                    │ écran 1 ⇄ 2     │
- │  → 32×32 → hash (cache) │                                    │ (sans le PC)    │
+ ┌─ Separate thread ───────┐                                    ┌─────────────────┐
+ │  process → app          │                                    │ TOUCH / BOOT    │
+ │  → theme icon           │                                    │ screen 1 ⇄ 2    │
+ │  → 32×32 → hash (cache) │                                    │ (without the PC)│
  └─────────────────────────┘                                    └─────────────────┘
 ```
 
-> `a1b2` est un hash abrégé : en réalité 8 caractères hexadécimaux.
+> `a1b2` is a shortened hash: actually 8 hexadecimal characters.
 
-| Sens | Trame | Fréquence | Contenu |
-|------|-------|-----------|---------|
-| PC → ESP | `P:h;pct;nom\|h;pct;nom\|…` | 1 s | 12 entrées max. `h` = hash de l'icône en 8 hexa (`00000000` = pas encore d'icône) ; `pct` = %CPU × 10 entier (ex. `153` = 15,3 %) ; `nom` = nom du processus (15 car. max, ASCII, `\|` `;` `,` `:` remplacés par `_`). ~380 octets au pire |
-| PC → ESP | `I:h;idx;n;<base64>` | à la demande | Morceau `idx` (0–7) sur `n` = 8 d'une icône 32×32 RGB565 big-endian (2048 o, alpha pré-mélangé sur le fond `0x0D0D0D`) : 256 o par morceau, 360 caractères par ligne |
-| ESP → PC | `?I:h` | si une icône manque | Demande d'icône, relancée toutes les 2 s tant qu'elle n'est pas complète |
+| Direction | Frame | Frequency | Content |
+|-----------|-------|-----------|---------|
+| PC → ESP | `P:h;pct;name\|h;pct;name\|…` | 1 s | 12 entries max. `h` = icon hash as 8 hex digits (`00000000` = no icon yet); `pct` = CPU % × 10 as integer (e.g. `153` = 15.3 %); `name` = process name (15 chars max, ASCII, `\|` `;` `,` `:` replaced by `_`). ~380 bytes worst case |
+| PC → ESP | `I:h;idx;n;<base64>` | on request | Chunk `idx` (0–7) of `n` = 8 of a 32×32 big-endian RGB565 icon (2048 bytes, alpha pre-blended on the `0x0D0D0D` background): 256 bytes per chunk, 360 characters per line |
+| ESP → PC | `?I:h` | when an icon is missing | Icon request, retried every 2 s until complete |
 
-`h` est le hash **FNV-1a 32 bits du contenu** de l'icône (jamais 0), calculé des deux côtés.
+`h` is the **32-bit FNV-1a hash of the icon content** (never 0), computed on both sides.
 
-| Situation | Ce qui se passe |
-|-----------|-----------------|
-| Trame `P:` perdue ou corrompue | L'écran 1 n'est pas touché ; la suivante arrive 1 s plus tard |
-| L'ESP32 redémarre (cache vide) | Il voit des hash inconnus et redemande les icônes tout seul |
-| Morceau d'icône abîmé | Le hash recalculé ne correspond pas → icône rejetée puis redemandée |
-| Processus sans appli (démon, script, thread noyau) | Icône générique `application-x-executable`, comme le moniteur système |
-| Plusieurs processus avec la même icône | Même hash → envoyée et stockée une seule fois |
-| Plus de trame `P:` pendant 5 s | L'écran 2 est vidé |
+| Situation | What happens |
+|-----------|--------------|
+| `P:` frame lost or corrupted | Screen 1 is not affected; the next one arrives 1 s later |
+| The ESP32 reboots (empty cache) | It sees unknown hashes and requests the icons again on its own |
+| Damaged icon chunk | The recomputed hash does not match → icon rejected then requested again |
+| Process without an app (daemon, script, kernel thread) | Generic `application-x-executable` icon, like the system monitor |
+| Several processes with the same icon | Same hash → sent and stored only once |
+| No `P:` frame for 5 s | Screen 2 is cleared |
 
-**Côté NUC** (`tools/proc_top.py`) :
-- Le %CPU est calculé en lisant directement `/proc/<pid>/stat` (~6 ms pour ~480 processus, contre ~20 ms via psutil) ; nom et exécutable ne sont lus que pour le top 12.
-- L'appli d'un processus est trouvée, dans l'ordre, par : l'id d'appli du scope systemd (`app-gnome-brave\x2dbrowser-….scope` → `brave-browser.desktop`), à condition que l'exécutable soit dans le dossier de l'appli (un `bash` lancé dans le terminal de VS Code garde donc l'icône générique) ; le nom de l'exécutable (`Exec=`, `StartupWMClass=`) ; le dossier privé de l'appli (les helpers de Brave, rangés dans le scope `org.chromium.Chromium`, sont reconnus par `/opt/brave.com/brave/`).
-- L'icône est cherchée dans le thème actif (`org.gnome.desktop.interface icon-theme`, lu sans session graphique car le service n'a pas de `DISPLAY`), ses thèmes hérités, `hicolor` puis `/usr/share/pixmaps` ; chargée par GdkPixbuf (PNG/SVG/XPM) puis convertie par Pillow.
-- Recherche et rendu tournent dans un thread séparé : tant qu'une icône n'est pas prête, le hash envoyé est `0` et l'ESP32 affiche la pastille. Les rendus sont mis en cache dans `~/.cache/nuc-monitor/icons/` (clé = chemin + date de modification de l'image). Aucune commande externe n'est lancée.
-- Sans Pillow, les trames `P:` sont envoyées sans icônes (pastilles uniquement).
+**NUC side** (`tools/proc_top.py`):
+- CPU % is computed by reading `/proc/<pid>/stat` directly (~6 ms for ~480 processes, versus ~20 ms via psutil); name and executable are only read for the top 12.
+- A process's app is found, in order, by: the app id of the systemd scope (`app-gnome-brave\x2dbrowser-….scope` → `brave-browser.desktop`), provided the executable lives in the app's folder (so a `bash` started in the VS Code terminal keeps the generic icon); the executable name (`Exec=`, `StartupWMClass=`); the app's private folder (Brave helpers, placed in the `org.chromium.Chromium` scope, are recognized by `/opt/brave.com/brave/`).
+- The icon is looked up in the active theme (`org.gnome.desktop.interface icon-theme`, read without a graphical session since the service has no `DISPLAY`), its inherited themes, `hicolor` then `/usr/share/pixmaps`; loaded by GdkPixbuf (PNG/SVG/XPM) then converted by Pillow.
+- Lookup and rendering run in a separate thread: until an icon is ready, the hash sent is `0` and the ESP32 shows the badge. Renders are cached in `~/.cache/nuc-monitor/icons/` (key = path + modification date of the image). No external command is spawned.
+- Without Pillow, `P:` frames are sent without icons (badges only).
 
-**Tactile et bouton** : la puce CST3530 est décrite dans [Hardware](#hardware). Le pilote lit les points dans sa propre tâche, sur interruption (GPIO11). `touch_cst3530.c` l'enveloppe, parce que son en-tête redéfinit `bool`, `NULL`, `HIGH`… et ne doit pas être inclus dans le `.ino`. Un doigt n'est considéré comme posé que si une interruption est arrivée dans les 200 dernières ms, pour qu'un rapport de levée perdu ne laisse pas un appui « collé ». Une bascule demande que le doigt ait été levé au moins 150 ms, et 400 ms d'écart avec la bascule précédente. Le bouton BOOT a un anti-rebond de 30 ms. Aucun des deux écrans ne défile : sinon un glissé du doigt déplacerait tout le contenu hors de l'écran (écran noir). Au démarrage, le pilote écrit ses messages `[HYN]` sur le port série avec `printf`, et le script PC les ignore.
+**Touch and button**: the CST3530 chip is described in [Hardware](#hardware). The driver reads touch points in its own task, on interrupt (GPIO11). `touch_cst3530.c` wraps it, because its header redefines `bool`, `NULL`, `HIGH`… and must not be included in the `.ino`. A finger only counts as down if an interrupt arrived within the last 200 ms, so that a lost release report does not leave a "stuck" press. A switch requires the finger to have been lifted for at least 150 ms, and 400 ms since the previous switch. The BOOT button has a 30 ms debounce. Neither screen scrolls: otherwise a finger swipe would move the whole content off screen (black screen). At boot, the driver writes its `[HYN]` messages to the serial port with `printf`, and the PC script ignores them.
 
-**Côté ESP32** : `icon_cache.cpp` garde 48 icônes en PSRAM (~96 Ko, éviction LRU) ; `loop()` traite jusqu'à 16 lignes par tour pour absorber les 8 lignes d'une icône.
+**ESP32 side**: `icon_cache.cpp` keeps 48 icons in PSRAM (~96 KB, LRU eviction); `loop()` handles up to 16 lines per pass to absorb the 8 lines of an icon.
 
-### Cadence et décalage des envois
+### Timing and offset of frames
 
-Les trames `CPU:` (0,25 s), `P:` (1 s) et `I:` (à la demande) ne se gênent pas :
+The `CPU:` (0.25 s), `P:` (1 s) and `I:` (on request) frames do not interfere:
 
-- **Un seul envoyeur** : une seule boucle Python écrit sur le port, les lignes partent l'une après l'autre et ne peuvent pas se mélanger.
-- **L'ESP32 découpe par ligne** (`\n`) et dirige chaque ligne selon son préfixe (`P:`, `I:`, sinon trame principale).
-- **Décalage** : `P:` part 0,125 s après la trame principale, et jamais dans le même tour de boucle.
-- **Tampon de sortie unique** : si le FIFO USB est plein, `os.write` n'écrit qu'une partie ; le reste est gardé et envoyé dès que le FIFO a de la place (`select()` surveille le port en écriture) au lieu d'être perdu. Si l'ESP32 ne lit plus du tout (plus de 1 Ko en attente), les nouvelles trames d'écran sont sautées plutôt qu'empilées.
-- **Icônes en dernier** : les 8 lignes d'une icône (~2,9 Ko) ne partent que si aucune trame d'écran n'attend, au maximum une icône toutes les 100 ms. Le tampon RX de l'ESP32 fait 4096 octets.
+- **A single sender**: only one Python loop writes to the port, lines go out one after the other and cannot get mixed.
+- **The ESP32 splits by line** (`\n`) and routes each line by its prefix (`P:`, `I:`, otherwise main frame).
+- **Offset**: `P:` goes out 0.125 s after the main frame, and never in the same loop pass.
+- **Single output buffer**: if the USB FIFO is full, `os.write` only writes part of it; the rest is kept and sent as soon as the FIFO has room (`select()` watches the port for writing) instead of being lost. If the ESP32 stops reading altogether (more than 1 KB pending), new screen frames are skipped rather than piled up.
+- **Icons last**: the 8 lines of an icon (~2.9 KB) only go out when no screen frame is waiting, at most one icon every 100 ms. The ESP32 RX buffer is 4096 bytes.
 
 ```
 0 ──── 0.125 ──── 0.25 ──── 0.5 ──── 0.75 ──── 1.0 ──── 1.125
@@ -445,88 +449,88 @@ Les trames `CPU:` (0,25 s), `P:` (1 s) et `I:` (à la demande) ne se gênent pas
 
 ---
 
-## Points techniques notables
+## Notable technical points
 
-- **HWCDC vs HardwareSerial** : l'ESP32-S3 expose `Serial` en HWCDC quand `ARDUINO_USB_CDC_ON_BOOT=1`. Sans ce flag, `Serial.available()` reste toujours à 0.
-- **Buffer série HWCDC** : le buffer RX logiciel est étendu à 4096 octets via `Serial.setRxBufferSize(4096)` (défaut = 256) pour absorber une icône complète (8 lignes `I:`) pendant un rendu LVGL. Le buffer de ligne de `serial_parser.h` reste à 512 octets. `Serial.setTxTimeoutMs(0)` : les demandes `?I:` ne bloquent jamais si le PC ne lit pas. Le script Python tronque les lignes dépassant 510 octets avant envoi. En cas de ligne trop longue côté firmware, `serial_read_line()` rejette la ligne entière (flag `overflow`) plutôt que de parser des données tronquées.
-- **Double-open série** : l'ouverture de `/dev/ttyACM0` sous Linux déclenche un reset USB-JTAG. Le script ouvre deux fois le port (drain + close entre les deux) pour obtenir une session cdc-acm propre.
-- **Protocole compact** : les 16 cœurs CPU sont encodés dans un seul champ `CX:v;v;...;v` (séparateur `;`) au lieu de 16 champs `C0`…`C15`. Les débits SSD sont en KB/s entier (pas en MB/s décimal) pour une meilleure précision sub-MB/s. Taille typique d'un message : ~330 octets mesurés, pire cas calculé ~415 octets (OSKV à 40 caractères, 16 cœurs à 100 %, débits SSD à 7 chiffres, débit réseau à 6 chiffres), soit ~95 octets de marge sous les 510 du buffer. Vérifier ce budget avant tout ajout de champ.
-- **Troncature `OSKV`** : la version noyau (`platform.release()`, ex: `6.17.0-40-generic`) est compactée en jetant les segments alphabétiques (`generic`, `lowlatency`, ...) et en concaténant sans tiret les segments numériques restants avec le premier segment : `6.17.0-40-generic` → `6.17.040`. La chaîne finale `OS_NAME OS_VERSION (kernel)` est tronquée à 40 caractères et nettoyée des `,`/`:` (délimiteurs du protocole) avant envoi. Calculée une seule fois au démarrage du script (ne change pas en cours d'exécution).
-- **Débit réseau EMA** : `get_net_avg_kbps()` calcule le total upload + download sur l'interface WiFi (`wl*`) et le lisse via une moyenne exponentielle (α=0.25 ≈ constante de temps ~1 s). Affiché en KB/s ou MB/s selon le débit, identique à un indicateur de copie de fichier.
-- **Fréquence CPU** : moyenne des `/sys/devices/system/cpu/cpu*/cpufreq/scaling_cur_freq` (kHz, chemins résolus au démarrage ; c'est ce que moyenne `psutil.cpu_freq()`, utilisé en repli) ; transmise × 10 pour conserver une décimale entière (ex: 32 = 3.2 GHz). Décodée côté firmware en divisant par 10.
-- **Puissance du package (`CPWR`)** : lue dans `power1_average` du hwmon amdgpu (PPT), RAPL en repli. Voir [Mesure de la puissance (wattage)](#mesure-de-la-puissance-wattage).
-- **LVGL %f** : `lv_snprintf` (LVGL 8.3) ne supporte pas `%f`. Toutes les valeurs float sont converties en entiers avant formatage (`(int)(val + 0.5f)`).
-- **VRAM source** : `/sys/class/drm/card1/device/mem_info_vram_used` et `mem_info_vram_total` (driver amdgpu, pas besoin de ROCm).
-- **Temp NVMe** : `/sys/class/nvme/nvme0/hwmon*/temp1_input` (millidegrés → divisé par 1000).
-- **Détection VPN** : `psutil.net_if_stats()`, 1×/s (`_VPN_INTERVAL`), valeur mise en cache entre deux. Critères, compatibilité et limites : voir [Détection du VPN](#détection-du-vpn).
-- **WiFi** : SSID et force du signal du point d'accès actif sont lus sur le bus D-Bus système de NetworkManager (`Device.Wireless.ActiveAccessPoint` → `AccessPoint.Ssid` / `Strength`), toutes les 5 s (`_WIFI_INTERVAL`) : NetworkManager ne rafraîchit la force qu'à ses scans. Avant, le script lançait `nmcli` 4×/s : plus de la moitié du CPU du service partait dans ces processus, et `nmcli` mettait parfois plusieurs secondes à répondre (SSID vide). `nmcli` ne sert plus que de repli si `python3-dbus` est absent, lancé avec `LC_ALL=C` pour ne pas dépendre de la langue (`yes`/`oui`).
-- **Températures** : `CTEMP` est lu directement dans le fichier hwmon de `k10temp` (`Tctl`), résolu au démarrage ; `psutil.sensors_temperatures()`, qui relit tous les capteurs (~2 ms), ne sert qu'en repli.
-- **Boucle d'envoi** : entre deux tours, le script dort dans `select()` jusqu'à la prochaine échéance (trame principale, trame `P:`, lecture de la veille, icône), une demande `?I:` de l'ESP32 ou de la place dans le FIFO de sortie (max 0,25 s). Environ 20 réveils/s au lieu de 100 avec l'ancien `sleep(0.01)`. Le port n'est lu que si `select()` le signale lisible : en mode raw (`VMIN=0`), `read()` renvoie 0 octet quand il n'y a rien à lire, et 0 octet après « lisible » signifie que le port est raccroché (débranchement → reconnexion).
-- **Coût CPU** : ~2 % d'un thread pour tout le service (mesuré sur 30 s), sans aucun processus enfant. Pour le mesurer : comparer `usage_usec` de `/sys/fs/cgroup/system.slice/nuc-monitor.service/cpu.stat` à quelques minutes d'intervalle (`top` ne montre pas le CPU des processus enfants).
-- **Rétroéclairage PWM** : backlight sur `TFT_BL` (GPIO 1) via LEDC, canal 0, 5 kHz, 8-bit. `BL_BRIGHTNESS = 153` ≈ 60 % dans `sys_monitor.ino` — modifier cette valeur pour ajuster la luminosité (0–255).
-- **Gauge SSD1** : barre unique affichant `R+W` cumulés en KB/s, centrée entre les labels `R - W` et le débit affiché à droite. Échelle : 20 000 KB/s (≈ 20 MB/s) = 100 %. Affichage dynamique : `KB/s` sous 10 240 KB/s, `MB/s` au-dessus. Les indicateurs R et W s'allument en vert au-dessus de 512 KB/s.
-- **Santé SMART SSD1** : lue via l'interface D-Bus `org.freedesktop.UDisks2.NVMe.Controller` (méthode `SmartGetAttributes`, propriété `percent_used`), exposée par le service `UDisks2` déjà actif sur le système — **aucun droit root requis** (contrairement à `smartctl`/`nvme-cli` classiques, qui nécessitent un accès direct au device `/dev/nvme0`). Uniquement disponible pour le disque NVMe (SSD1) ; le module Python `dbus` (paquet système `python3-dbus`, déjà présent) est optionnel — son absence désactive juste la fonctionnalité. La lecture D-Bus est throttlée à 1×/60 s côté script (`_SSD_HEALTH_INTERVAL`), la santé SMART ne variant pas assez vite pour justifier un appel à chaque cycle de 0.25 s.
-- **Santé + température SSD2** : SSD2 (Crucial CT2000MX500SSD1, pont USB-SATA ASMedia ASM235C) n'a pas d'attribut SMART standardisé de type "% d'usure" comme le NVMe (les attributs ATA propriétaires varient par fabricant) — lu à la place via l'interface `org.freedesktop.UDisks2.Drive.Ata` (ATA passthrough/SAT à travers le pont USB, toujours sans root). Statut de santé basé sur `SmartFailing` (agrégat officiel, équivalent `smartctl -H`), `SmartNumAttributesFailing` et `SmartNumBadSectors` : affiché en valeurs symboliques `100 %` (sain, vert) / `20 %` (WARN, rouge) plutôt qu'un vrai pourcentage mesuré, pour rester visuellement cohérent avec la jauge SSD1 sans donner une fausse précision. La température (`SmartTemperature`, absente de tout sysfs hwmon pour ce pont USB) est lue sur la même interface. Le script lit les valeurs déjà en cache dans UDisks2, toutes les 60 s (`_refresh_ssd2_smart()`). Il n'appelle pas `SmartUpdate()` : cette méthode demande une autorisation polkit liée à une session active, refusée (`NotAuthorizedCanObtain`) pour un service systemd sans session. UDisks2 rafraîchit ces valeurs tout seul, avec quelques minutes de retard au plus, ce qui suffit pour un indicateur qui varie lentement.
-- **Pas de débit SSD2** : le pont USB-SATA ASMedia ASM235C (driver `uas`, `/dev/sdc`) ne met pas à jour `/proc/diskstats` pour les lectures — seules les écritures fsync'd sont comptabilisées avec délai. La gauge SSD2 a été supprimée et `S2RD`/`S2WR` ne sont plus transmis ; seuls santé, température et capacité SSD2 sont affichés (ligne partagée avec les mises à jour, visible quand `UPD == 0`).
-- **Détection SSD** : `_detect_ssd_devices()` filtre les périphériques avec `taille ≥ 1 GB` pour exclure les gadgets USB 0-octet (sda/sdb exposés par l'ESP32 en mass-storage). Le NVMe est toujours sélectionné en premier.
-- **Intervalle polling Python** : 0.25 s par défaut dans `monitor_sender.py`. Configurable via `--interval`.
-- **Veille de l'écran ESP32** : le script lit toutes les secondes `PowerSaveMode` de `org.gnome.Mutter.DisplayConfig` sur le bus D-Bus de session (`/run/user/<uid>/bus`, accessible au service car il tourne en `User=daniel`) — c'est l'état DPMS réel de l'écran du NUC (0 = allumé, 3 = éteint), qui s'éteint après le délai GNOME « Écran noir » (`org.gnome.desktop.session idle-delay`, 600 s ici). `--sleep-delay` s après l'extinction (600 s par défaut, soit ~20 min d'inactivité au total), le script envoie `SCR:0` : l'ESP32 coupe le rétroéclairage, met l'AXS15231B en veille (`0x28` + `0x10`) et arrête le rendu LVGL (les données continuent d'être reçues et appliquées). Dès que souris/clavier rallument l'écran du NUC (y compris sur l'écran de verrouillage), `SCR:1` est envoyé immédiatement → réveil en ≤ 1 s (`0x11`, 120 ms, `0x29` + redessin complet). `ScreenSaver.Active` n'est pas utilisé car il reste vrai tant que l'écran de verrouillage est affiché. Sans session GNOME (boot, greeter), l'état est inconnu et l'écran reste allumé ; si le PC ne transmet plus rien pendant 5 s, l'ESP32 se réveille pour afficher « En attente du PC... ». Pendant la veille, l'ESP32 reste actif (pas de deep/light sleep) car il doit continuer à écouter l'USB CDC. Test rapide : `python tools/monitor_sender.py --sleep-delay 10` puis `xset dpms force off`.
-- **Piles souris / clavier** : lues via `org.freedesktop.UPower` sur le bus D-Bus système (`EnumerateDevices` puis propriétés `Percentage`, `State`, `Model`, `Type`), sans root — UPower agrège déjà le récepteur Logitech HID++ (souris MX Anywhere 3S, `hidpp_battery_*`) et BlueZ (clavier K780 en Bluetooth). Seuls les périphériques `PowerSupply == false` et `IsPresent == true` sont gardés. UPower déclare **les deux** en `Type = 6` (keyboard), d'où un classement par nom de modèle (`keyboard|clavier|K###` → clavier, `mouse|souris|MX Anywhere/Master/Vertical|M###` → souris), le `Type` ne servant que de repli. Lecture throttlée à 1×/60 s (`_PERIPH_BAT_INTERVAL`). Côté écran, deux colonnes de part et d'autre de l'arc GPU (`KB` à gauche, `MS` à droite) : icône pile LVGL (`LV_SYMBOL_BATTERY_FULL/3/2/1/EMPTY`, ou `LV_SYMBOL_CHARGE` en charge) + %, colorés en vert (≥ 60 %), jaune (≥ 35 %), orange (≥ 15 %) ou rouge (< 15 %). Le % du clavier Bluetooth est celui mémorisé par BlueZ : il n'est mis à jour que lorsque le clavier le transmet (peu fréquent), et reste affiché même clavier éteint.
+- **HWCDC vs HardwareSerial**: the ESP32-S3 exposes `Serial` as HWCDC when `ARDUINO_USB_CDC_ON_BOOT=1`. Without this flag, `Serial.available()` always stays at 0.
+- **HWCDC serial buffer**: the software RX buffer is extended to 4096 bytes via `Serial.setRxBufferSize(4096)` (default = 256) to absorb a full icon (8 `I:` lines) during an LVGL render. The line buffer of `serial_parser.h` stays at 512 bytes. `Serial.setTxTimeoutMs(0)`: `?I:` requests never block if the PC is not reading. The Python script truncates lines over 510 bytes before sending. If a line is too long on the firmware side, `serial_read_line()` rejects the whole line (`overflow` flag) rather than parsing truncated data.
+- **Serial double-open**: opening `/dev/ttyACM0` on Linux triggers a USB-JTAG reset. The script opens the port twice (drain + close in between) to get a clean cdc-acm session.
+- **Compact protocol**: the 16 CPU cores are encoded in a single `CX:v;v;...;v` field (`;` separator) instead of 16 `C0`…`C15` fields. SSD throughput is in integer KB/s (not decimal MB/s) for better sub-MB/s precision. Typical message size: ~330 bytes measured, computed worst case ~415 bytes (40-char OSKV, 16 cores at 100 %, 7-digit SSD throughput, 6-digit network throughput), i.e. ~95 bytes of margin under the 510-byte buffer. Check this budget before adding any field.
+- **`OSKV` shortening**: the kernel version (`platform.release()`, e.g. `6.17.0-40-generic`) is compacted by dropping alphabetic segments (`generic`, `lowlatency`, ...) and concatenating the remaining numeric segments without a dash to the first segment: `6.17.0-40-generic` → `6.17.040`. The final `OS_NAME OS_VERSION (kernel)` string is truncated to 40 characters and stripped of `,`/`:` (protocol delimiters) before sending. Computed once at script startup (does not change while running).
+- **Network throughput EMA**: `get_net_avg_kbps()` computes total upload + download on the WiFi interface (`wl*`) and smooths it with an exponential moving average (α=0.25 ≈ ~1 s time constant). Shown in KB/s or MB/s depending on the rate, like a file-copy indicator.
+- **CPU frequency**: average of `/sys/devices/system/cpu/cpu*/cpufreq/scaling_cur_freq` (kHz, paths resolved at startup; this is what `psutil.cpu_freq()` averages, used as fallback); sent × 10 to keep one decimal as an integer (e.g. 32 = 3.2 GHz). Decoded on the firmware side by dividing by 10.
+- **Package power (`CPWR`)**: read from `power1_average` of the amdgpu hwmon (PPT), RAPL as fallback. See [Power measurement (wattage)](#power-measurement-wattage).
+- **LVGL %f**: `lv_snprintf` (LVGL 8.3) does not support `%f`. All float values are converted to integers before formatting (`(int)(val + 0.5f)`).
+- **VRAM source**: `/sys/class/drm/card1/device/mem_info_vram_used` and `mem_info_vram_total` (amdgpu driver, no ROCm needed).
+- **NVMe temp**: `/sys/class/nvme/nvme0/hwmon*/temp1_input` (millidegrees → divided by 1000).
+- **VPN detection**: `psutil.net_if_stats()`, 1×/s (`_VPN_INTERVAL`), value cached in between. Criteria, compatibility and limits: see [VPN detection](#vpn-detection).
+- **WiFi**: SSID and signal strength of the active access point are read from NetworkManager on the system D-Bus (`Device.Wireless.ActiveAccessPoint` → `AccessPoint.Ssid` / `Strength`), every 5 s (`_WIFI_INTERVAL`): NetworkManager only refreshes the strength when it scans. Previously, the script ran `nmcli` 4×/s: more than half of the service's CPU went into these processes, and `nmcli` sometimes took several seconds to answer (empty SSID). `nmcli` is now only a fallback if `python3-dbus` is missing, run with `LC_ALL=C` so as not to depend on the language (`yes`/`oui`).
+- **Temperatures**: `CTEMP` is read directly from the `k10temp` hwmon file (`Tctl`), resolved at startup; `psutil.sensors_temperatures()`, which rereads every sensor (~2 ms), is only a fallback.
+- **Send loop**: between passes, the script sleeps in `select()` until the next deadline (main frame, `P:` frame, standby check, icon), an `?I:` request from the ESP32 or room in the output FIFO (max 0.25 s). About 20 wake-ups/s instead of 100 with the former `sleep(0.01)`. The port is only read when `select()` reports it readable: in raw mode (`VMIN=0`), `read()` returns 0 bytes when there is nothing to read, and 0 bytes after "readable" means the port hung up (unplug → reconnect).
+- **CPU cost**: ~2 % of one thread for the whole service (measured over 30 s), with no child process. To measure it: compare `usage_usec` in `/sys/fs/cgroup/system.slice/nuc-monitor.service/cpu.stat` a few minutes apart (`top` does not show the CPU of child processes).
+- **PWM backlight**: backlight on `TFT_BL` (GPIO 1) via LEDC, channel 0, 5 kHz, 8-bit. `BL_BRIGHTNESS = 153` ≈ 60 % in `sys_monitor.ino`; change this value to adjust brightness (0–255).
+- **SSD1 gauge**: single bar showing combined `R+W` in KB/s, centered between the `R - W` labels and the throughput shown on the right. Scale: 20,000 KB/s (≈ 20 MB/s) = 100 %. Dynamic display: `KB/s` under 10,240 KB/s, `MB/s` above. The R and W indicators turn green above 512 KB/s.
+- **SSD1 SMART health**: read via the D-Bus interface `org.freedesktop.UDisks2.NVMe.Controller` (`SmartGetAttributes` method, `percent_used` property), exposed by the `UDisks2` service already running on the system: **no root needed** (unlike classic `smartctl`/`nvme-cli`, which need direct access to the `/dev/nvme0` device). Only available for the NVMe drive (SSD1); the Python `dbus` module (system package `python3-dbus`, already present) is optional: without it, only this feature is disabled. The D-Bus read is throttled to 1×/60 s in the script (`_SSD_HEALTH_INTERVAL`), as SMART health does not change fast enough to justify a call every 0.25 s cycle.
+- **SSD2 health + temperature**: SSD2 (Crucial CT2000MX500SSD1, ASMedia ASM235C USB-SATA bridge) has no standardized "wear %" SMART attribute like NVMe (proprietary ATA attributes vary by maker); it is read instead via the `org.freedesktop.UDisks2.Drive.Ata` interface (ATA passthrough/SAT through the USB bridge, still without root). The health status is based on `SmartFailing` (official aggregate, equivalent to `smartctl -H`), `SmartNumAttributesFailing` and `SmartNumBadSectors`: shown as symbolic values `100 %` (healthy, green) / `20 %` (WARN, red) rather than a really measured percentage, to stay visually consistent with the SSD1 gauge without implying false precision. The temperature (`SmartTemperature`, missing from any hwmon sysfs for this USB bridge) is read from the same interface. The script reads the values already cached in UDisks2, every 60 s (`_refresh_ssd2_smart()`). It does not call `SmartUpdate()`: this method requires a polkit authorization tied to an active session, which is denied (`NotAuthorizedCanObtain`) for a systemd service without a session. UDisks2 refreshes these values on its own, a few minutes late at most, which is enough for a slowly changing indicator.
+- **No SSD2 throughput**: the ASMedia ASM235C USB-SATA bridge (`uas` driver, `/dev/sdc`) does not update `/proc/diskstats` for reads; only fsync'd writes are counted, with a delay. The SSD2 gauge was removed and `S2RD`/`S2WR` are no longer sent; only SSD2 health, temperature and capacity are shown (line shared with updates, visible when `UPD == 0`).
+- **SSD detection**: `_detect_ssd_devices()` keeps devices with `size ≥ 1 GB` to exclude 0-byte USB gadgets (sda/sdb exposed by the ESP32 as mass storage). The NVMe is always picked first.
+- **Python polling interval**: 0.25 s by default in `monitor_sender.py`. Configurable with `--interval`.
+- **ESP32 screen standby**: every second, the script reads `PowerSaveMode` of `org.gnome.Mutter.DisplayConfig` on the session D-Bus (`/run/user/<uid>/bus`, reachable by the service because it runs as `User=daniel`): this is the real DPMS state of the NUC's screen (0 = on, 3 = off), which turns off after the GNOME "Blank screen" delay (`org.gnome.desktop.session idle-delay`, 600 s here). `--sleep-delay` s after it turns off (600 s by default, i.e. ~20 min of total inactivity), the script sends `SCR:0`: the ESP32 turns off the backlight, puts the AXS15231B to sleep (`0x28` + `0x10`) and stops LVGL rendering (data is still received and applied). As soon as mouse/keyboard turn the NUC's screen back on (including on the lock screen), `SCR:1` is sent immediately → wake-up in ≤ 1 s (`0x11`, 120 ms, `0x29` + full redraw). `ScreenSaver.Active` is not used because it stays true while the lock screen is shown. Without a GNOME session (boot, greeter), the state is unknown and the screen stays on; if the PC sends nothing for 5 s, the ESP32 wakes up to show "En attente du PC..." (waiting for the PC). During standby, the ESP32 stays awake (no deep/light sleep) because it must keep listening on USB CDC. Quick test: `python tools/monitor_sender.py --sleep-delay 10` then `xset dpms force off`.
+- **Mouse / keyboard batteries**: read via `org.freedesktop.UPower` on the system D-Bus (`EnumerateDevices` then the `Percentage`, `State`, `Model`, `Type` properties), without root: UPower already aggregates the Logitech HID++ receiver (MX Anywhere 3S mouse, `hidpp_battery_*`) and BlueZ (K780 keyboard over Bluetooth). Only devices with `PowerSupply == false` and `IsPresent == true` are kept. UPower reports **both** as `Type = 6` (keyboard), hence sorting by model name (`keyboard|clavier|K###` → keyboard, `mouse|souris|MX Anywhere/Master/Vertical|M###` → mouse), `Type` only being a fallback. Read throttled to 1×/60 s (`_PERIPH_BAT_INTERVAL`). On screen, two columns on either side of the GPU arc (`KB` on the left, `MS` on the right): LVGL battery icon (`LV_SYMBOL_BATTERY_FULL/3/2/1/EMPTY`, or `LV_SYMBOL_CHARGE` when charging) + %, colored green (≥ 60 %), yellow (≥ 35 %), orange (≥ 15 %) or red (< 15 %). The Bluetooth keyboard % is the one stored by BlueZ: it is only updated when the keyboard sends it (infrequently), and stays shown even with the keyboard off.
 
 ---
 
-## Problèmes courants
+## Troubleshooting
 
-**Le port `/dev/ttyACM0` n'apparaît pas**
-→ Maintenir BOOT enfoncé, appuyer sur RST, relâcher RST puis BOOT, puis flasher.
+**The `/dev/ttyACM0` port does not appear**
+→ Hold BOOT, press RST, release RST then BOOT, then flash.
 
-**Données reçues mais affichage figé**
-→ Vérifier que `ARDUINO_USB_CDC_ON_BOOT=1` est bien dans les build_flags de `[env:sys_monitor]`.
+**Data received but display frozen**
+→ Check that `ARDUINO_USB_CDC_ON_BOOT=1` is in the build_flags of `[env:sys_monitor]`.
 
-**La LED verte clignote sans batterie**
-→ Normal ; le firmware envoie `reg 0x09 = 0x64` au BQ25896 pour l'éteindre au démarrage.
+**The green LED blinks without a battery**
+→ Normal; the firmware sends `reg 0x09 = 0x64` to the BQ25896 to turn it off at boot.
 
-**Le service systemd n'existe pas / n'a pas démarré après un reboot**
-→ Le script d'installation n'a pas encore été exécuté. Lancer une seule fois :
+**The systemd service does not exist / did not start after a reboot**
+→ The install script has not been run yet. Run it once:
 ```bash
 sudo bash tools/install-autostart.sh
 ```
-Vérifier ensuite que le service est bien activé :
+Then check that the service is enabled:
 ```bash
-sudo systemctl is-enabled nuc-monitor   # doit afficher "enabled"
+sudo systemctl is-enabled nuc-monitor   # should print "enabled"
 sudo systemctl status nuc-monitor
 ```
 
-**L'écran ESP32 ne se met jamais en veille**
-→ Vérifier dans `sudo journalctl -u nuc-monitor` la ligne du preflight `Veille écran` : si elle affiche `n/a`, le bus D-Bus de session ou Mutter n'est pas accessible (pas de session GNOME ouverte, ou `python3-dbus` absent). Vérifier aussi que GNOME éteint bien l'écran (Paramètres → Énergie → « Écran noir ») et que `--sleep-delay` n'est pas à `0`. Test : `busctl --user get-property org.gnome.Mutter.DisplayConfig /org/gnome/Mutter/DisplayConfig org.gnome.Mutter.DisplayConfig PowerSaveMode` doit renvoyer `i 3` après `xset dpms force off`.
+**The ESP32 screen never goes to standby**
+→ Check the preflight line `Veille écran` in `sudo journalctl -u nuc-monitor`: if it shows `n/a`, the session D-Bus or Mutter is not reachable (no GNOME session open, or `python3-dbus` missing). Also check that GNOME does turn the screen off (Settings → Power → "Blank screen") and that `--sleep-delay` is not `0`. Test: `busctl --user get-property org.gnome.Mutter.DisplayConfig /org/gnome/Mutter/DisplayConfig org.gnome.Mutter.DisplayConfig PowerSaveMode` should return `i 3` after `xset dpms force off`.
 
-**Les piles souris/clavier n'apparaissent pas (colonnes vides à côté de l'arc GPU)**
-→ Vérifier qu'UPower voit les périphériques : `upower -d` doit lister la souris (`hidpp_battery_*`) et le clavier (`keyboard_dev_*`) avec un `percentage`. Si un périphérique est listé mais affiché du mauvais côté, son nom de modèle ne correspond pas aux motifs `_KBD_MODEL_RE` / `_MOUSE_MODEL_RE` de `monitor_sender.py` : les compléter. Les valeurs étant rafraîchies toutes les 60 s, attendre jusqu'à 1 min après un changement (branchement en charge, rallumage du clavier).
+**Mouse/keyboard batteries do not show (empty columns next to the GPU arc)**
+→ Check that UPower sees the devices: `upower -d` should list the mouse (`hidpp_battery_*`) and the keyboard (`keyboard_dev_*`) with a `percentage`. If a device is listed but shown on the wrong side, its model name does not match the `_KBD_MODEL_RE` / `_MOUSE_MODEL_RE` patterns of `monitor_sender.py`: extend them. Values are refreshed every 60 s, so wait up to 1 min after a change (plugged in to charge, keyboard turned back on).
 
-**Le SSID WiFi est vide ou le signal reste à 0**
-→ Vérifier que NetworkManager voit le point d'accès : `busctl get-property org.freedesktop.NetworkManager /org/freedesktop/NetworkManager org.freedesktop.NetworkManager Devices` puis, sur le périphérique WiFi, `ActiveAccessPoint` (`/` = pas connecté). Les valeurs sont rafraîchies toutes les 5 s : attendre jusqu'à 5 s après une reconnexion. Sans `python3-dbus`, le script se rabat sur `nmcli`.
+**The WiFi SSID is empty or the signal stays at 0**
+→ Check that NetworkManager sees the access point: `busctl get-property org.freedesktop.NetworkManager /org/freedesktop/NetworkManager org.freedesktop.NetworkManager Devices` then, on the WiFi device, `ActiveAccessPoint` (`/` = not connected). Values are refreshed every 5 s: wait up to 5 s after a reconnection. Without `python3-dbus`, the script falls back to `nmcli`.
 
-**La puissance (`nnW`) n'apparaît pas à côté de la fréquence CPU**
-→ Le script envoie `CPWR:0`, que l'écran masque. Vérifier la ligne `Puissance` du preflight (`sudo journalctl -u nuc-monitor | grep Puissance`) : `n/a` signifie que ni le PPT amdgpu ni RAPL n'est lisible. Contrôler `cat /sys/class/drm/card*/device/hwmon/hwmon*/power1_average` (voir [Mesure de la puissance](#mesure-de-la-puissance-wattage)). Un service démarré avec une ancienne version du script (qui ne lisait que RAPL, réservé à root) affiche toujours 0 : redéployer avec `bash tools/deploy.sh --no-flash`.
+**The power (`nnW`) does not show next to the CPU frequency**
+→ The script sends `CPWR:0`, which the screen hides. Check the `Puissance` preflight line (`sudo journalctl -u nuc-monitor | grep Puissance`): `n/a` means neither amdgpu PPT nor RAPL is readable. Check `cat /sys/class/drm/card*/device/hwmon/hwmon*/power1_average` (see [Power measurement](#power-measurement-wattage)). A service started with an old version of the script (which only read RAPL, root-only) always shows 0: redeploy with `bash tools/deploy.sh --no-flash`.
 
-**L'écran 2 reste vide ou les icônes restent des pastilles**
-→ Écran 2 vide : le script Python ne transmet plus de trame `P:` depuis 5 s (ancienne version du script, ou script arrêté) ; relancer `bash tools/deploy.sh --no-flash`. Pastilles permanentes : Pillow est absent (`sudo apt install python3-pil`), ou l'appli n'a pas d'icône trouvable ; la pastille est alors le comportement normal. Les icônes déjà rendues sont dans `~/.cache/nuc-monitor/icons/`, et ce dossier peut être supprimé sans risque.
+**Screen 2 stays empty or icons stay as badges**
+→ Empty screen 2: the Python script has not sent a `P:` frame for 5 s (old script version, or script stopped); rerun `bash tools/deploy.sh --no-flash`. Permanent badges: Pillow is missing (`sudo apt install python3-pil`), or the app has no icon that can be found; the badge is then the normal behavior. Already rendered icons are in `~/.cache/nuc-monitor/icons/`, and this folder can be deleted safely.
 
-**Le tactile ne répond pas (le bouton BOOT, lui, fonctionne)**
-→ Regarder les messages `[HYN]` envoyés au démarrage : arrêter le service (`sudo bash tools/dev-mode.sh`), ouvrir le port série (`~/.platformio/penv/bin/pio device monitor`) et appuyer sur RST. Une ligne `IC_info ... ictype:caca220e` confirme que la CST3530 répond. Sans elle, la carte est peut-être de l'ancienne révision (tactile intégré à l'AXS15231B en `0x3B`, voir [Hardware](#hardware)), que ce firmware ne gère pas. Ne pas activer `HYN_POWER_ON_UPDATA` pour « réparer » la puce : la mise à jour de son firmware est irréversible.
+**Touch does not respond (the BOOT button does)**
+→ Look at the `[HYN]` messages sent at boot: stop the service (`sudo bash tools/dev-mode.sh`), open the serial port (`~/.platformio/penv/bin/pio device monitor`) and press RST. A line `IC_info ... ictype:caca220e` confirms that the CST3530 answers. Without it, the board may be the old revision (touch built into the AXS15231B at `0x3B`, see [Hardware](#hardware)), which this firmware does not support. Do not enable `HYN_POWER_ON_UPDATA` to "repair" the chip: updating its firmware is irreversible.
 
-**L'indicateur VPN reste gris alors que le VPN est connecté**
-→ Le script ne reconnaît pas l'interface du VPN. Avant octobre 2026, seuls les noms contenant `tun`/`tap`/`vpn`/`wg` étaient reconnus : NordVPN en NordLynx (`nordlynx`) restait gris. Redéployer le script (`bash tools/deploy.sh --no-flash`), puis suivre la vérification de [Détection du VPN](#détection-du-vpn). Un VPN IPsec sans interface n'est pas détectable.
+**The VPN indicator stays grey while the VPN is connected**
+→ The script does not recognize the VPN interface. Before October 2026, only names containing `tun`/`tap`/`vpn`/`wg` were recognized: NordVPN with NordLynx (`nordlynx`) stayed grey. Redeploy the script (`bash tools/deploy.sh --no-flash`), then follow the check in [VPN detection](#vpn-detection). An IPsec VPN without an interface cannot be detected.
 
-**Le service systemd ne démarre pas**
-→ `sudo journalctl -u nuc-monitor -f` pour voir les erreurs. Vérifier que l'ESP32 est branché ou laisser le service : il reconnecte automatiquement.
+**The systemd service does not start**
+→ `sudo journalctl -u nuc-monitor -f` to see the errors. Check that the ESP32 is plugged in, or leave the service running: it reconnects automatically.
 
 ---
 
-## Bibliothèques
+## Libraries
 
-- [LVGL 8.3.0](https://github.com/lvgl/lvgl) — ne pas mettre à jour (rotation logicielle forcée)
-- Pilote tactile Hynitron V2.10, fourni par LilyGo ([branche `T-Display-S3-Long-cst3530`](https://github.com/Xinyuan-LilyGO/T-Display-S3-Long/tree/T-Display-S3-Long-cst3530)) — `HYN_POWER_ON_UPDATA` laissé à `0`
+- [LVGL 8.3.0](https://github.com/lvgl/lvgl): do not update (forced software rotation)
+- Hynitron V2.10 touch driver, supplied by LilyGo ([`T-Display-S3-Long-cst3530` branch](https://github.com/Xinyuan-LilyGO/T-Display-S3-Long/tree/T-Display-S3-Long-cst3530)), `HYN_POWER_ON_UPDATA` left at `0`
 - psutil, pyserial (Python)
-- dbus-python (`python3-dbus`, optionnel : WiFi, SMART, veille, piles)
-- Pillow, PyGObject / GdkPixbuf (Python, optionnels : icônes de l'écran 2)
+- dbus-python (`python3-dbus`, optional: WiFi, SMART, standby, batteries)
+- Pillow, PyGObject / GdkPixbuf (Python, optional: screen 2 icons)
