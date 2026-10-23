@@ -9,7 +9,7 @@ Le détail (protocole, matériel, choix techniques, dépannage) est dans `README
 - `examples/sys_monitor/` : **seul firmware actif** (env PlatformIO `sys_monitor`). `sys_monitor.ino` (boucle), `ui.cpp` (LVGL, écrans 1 et 2), `serial_parser.h` (struct `SysData`, parsing des clés), `icon_cache.cpp` (icônes en PSRAM), `touch_cst3530.c` (enveloppe du pilote tactile), `AXS15231B.cpp` (écran QSPI).
 - `tools/monitor_sender.py` : collecte des métriques et boucle d'envoi ; `tools/proc_top.py` : top 12 processus et icônes (écran 2).
 - `tools/deploy.sh`, `dev-mode.sh`, `install-autostart.sh`, `nuc-monitor.service` : service systemd `nuc-monitor`.
-- Les autres dossiers de `examples/` et de `lib/` (sauf `lib/lvgl`, `lib/lv_conf.h`, `lib/hyn_driver_for_esp32`) viennent du dépôt LilyGo d'origine : ne pas les modifier.
+- Les autres dossiers de `examples/` et de `lib/` (sauf `lib/lvgl`, `lib/lv_conf.h`, `lib/hyn_driver_for_esp32`) viennent du dépôt LilyGo d'origine (exemples repris de la branche `T-Display-S3-Long-cst3530`) : ne pas les modifier.
 
 ## Commandes
 
@@ -21,7 +21,7 @@ Le détail (protocole, matériel, choix techniques, dépannage) est dans `README
 ## Règles impératives
 
 - **Ne jamais reprogrammer le firmware de la puce tactile CST3530** : `HYN_POWER_ON_UPDATA` reste à `0` dans `lib/hyn_driver_for_esp32/hyn_cfg.h`. Le firmware d'origine n'est pas sauvegardable, la mise à jour serait irréversible.
-- **Ne pas mettre à jour LVGL** (8.3, rotation logicielle forcée) ni passer à Arduino-ESP32 3.x / ESP-IDF 5 (le pilote Hynitron dépend d'IDF 4.4).
+- **Ne pas mettre à jour LVGL** (8.3, rotation logicielle forcée) ni passer à Arduino-ESP32 3.x / ESP-IDF 5 (le pilote Hynitron dépend d'IDF 4.4) : la plateforme reste figée à `espressif32 @7.0.1` dans `platformio.ini`.
 - **Aucun droit root pour le service** (`User=` l'utilisateur qui installe, rempli par `install-autostart.sh` / `deploy.sh` à partir du modèle `nuc-monitor.service`) : lire via sysfs, D-Bus (UDisks2, UPower, NetworkManager, Mutter) ou hwmon. Ne pas proposer de règle udev qui rouvre RAPL `energy_uj` (correctif Platypus).
 - **Coût CPU** : le service tourne en permanence (~2 % d'un thread). Pas de `subprocess` ni de lecture coûteuse dans la boucle d'envoi ; préférer sysfs/D-Bus aux commandes externes. Les réécritures en C/Go ont été jugées non rentables.
 

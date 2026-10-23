@@ -57,4 +57,4 @@
 #define TOUCH_IICSCL 10
 #define TOUCH_IICSDA 15
 #define TOUCH_INT 11
-#define TOUCH_RES 16
+#define TOUCH_RES 2

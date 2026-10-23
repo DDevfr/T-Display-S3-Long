@@ -56,7 +56,9 @@ LilyGo changed the touch controller during production without renaming the board
 | Old revision | Built into the AXS15231B | `0x3B` | GPIO16 (shared with the display) | `master` branch, `touch` example |
 | CST3530 revision (this board) | Separate **CST3530** | `0x58` (`0x5A` in bootloader) | **GPIO2** | `T-Display-S3-Long-cst3530` branch, `cst3530_touch` example |
 
-This project only supports the CST3530 revision. The original LilyGo examples (`touch`, `factory`, `GFX_AXS15231B_Image`…) still in `examples/` target the old revision: their touch does not respond on this board, and the original `factory` firmware hangs (the right one for this board is `factory-cst3530.bin`, in the LilyGo `T-Display-S3-Long-cst3530` branch).
+This project only supports the CST3530 revision. The LilyGo examples in `examples/` (`factory`, `lvgl_demo`, `TFT`, `QWIIC_Sensor`, `cst3530_touch`) are taken from the `T-Display-S3-Long-cst3530` branch (synced on 2026-10-23) and target this revision. Only `GFX_AXS15231B_Image`, identical in both branches, still queries the old touch controller.
+
+To restore the factory firmware, rebuild the `factory` example (it inherits `HYN_POWER_ON_UPDATA = 0`) rather than flashing LilyGo's prebuilt `factory-cst3530.bin`, which is not included here. That binary is built with `HYN_POWER_ON_UPDATA = 1`: its embedded touch firmware has the same version as the chip on this board (`1010001`), so it should not reflash it, unless the chip had an older version or a failed boot.
 
 The CST3530 of this board identifies itself at boot (driver `[HYN]` messages on the serial port): `ictype:caca220e`, `fw_project_id:2601093`, chip firmware `fw_ver:1010001`.
 
@@ -66,7 +68,7 @@ It is driven by the Hynitron driver supplied by LilyGo (`lib/hyn_driver_for_esp3
 
 | Item | Version |
 |------|---------|
-| PlatformIO platform | `espressif32` 7.0.1 (not pinned in `platformio.ini`) |
+| PlatformIO platform | `espressif32` 7.0.1 (pinned in `platformio.ini`) |
 | Framework | Arduino-ESP32 2.0.17 (ESP-IDF 4.4) |
 | LVGL | 8.3.0-dev, bundled in `lib/lvgl` |
 | Touch driver | Hynitron V2.10 (20241111), bundled in `lib/hyn_driver_for_esp32` |
@@ -145,7 +147,7 @@ lib/
 └── hyn_driver_for_esp32/  # Hynitron/LilyGo touch driver (HYN_POWER_ON_UPDATA = 0)
 ```
 
-The other folders of `examples/` and `lib/` (`Arduino_GFX`, `Arduino_DriveBus`, `XPowersLib`) come from the original LilyGo repository and are not used by `sys_monitor`.
+The other folders of `examples/` and `lib/` (`Arduino_GFX`, `Arduino_DriveBus`, `XPowersLib`) come from the original LilyGo repository and are not used by `sys_monitor`. `examples/ESPHome_LVGL_HelloWorld/` is an ESPHome configuration (YAML), outside PlatformIO. The CST3530 datasheet (in Chinese) is in `datasheet/`.
 
 ---
 

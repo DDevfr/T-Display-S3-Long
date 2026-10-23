@@ -54,7 +54,9 @@ LilyGo a changé de contrôleur tactile en cours de production, sans changer le 
 | Ancienne révision | Intégré à l'AXS15231B | `0x3B` | GPIO16 (partagé avec l'écran) | branche `master`, exemple `touch` |
 | Révision CST3530 (cette carte) | **CST3530** séparé | `0x58` (`0x5A` en bootloader) | **GPIO2** | branche `T-Display-S3-Long-cst3530`, exemple `cst3530_touch` |
 
-Ce projet ne gère que la révision CST3530. Les exemples LilyGo d'origine (`touch`, `factory`, `GFX_AXS15231B_Image`…) encore présents dans `examples/` visent l'ancienne révision : leur tactile ne répond pas sur cette carte, et le firmware `factory` d'origine reste bloqué (le bon pour cette carte est `factory-cst3530.bin`, dans la branche LilyGo `T-Display-S3-Long-cst3530`).
+Ce projet ne gère que la révision CST3530. Les exemples LilyGo de `examples/` (`factory`, `lvgl_demo`, `TFT`, `QWIIC_Sensor`, `cst3530_touch`) sont repris de la branche `T-Display-S3-Long-cst3530` (synchronisés le 23-10-2026) et visent cette révision. Seul `GFX_AXS15231B_Image`, identique dans les deux branches, interroge encore l'ancien tactile.
+
+Pour remettre le firmware d'usine, recompiler l'exemple `factory` (il hérite de `HYN_POWER_ON_UPDATA = 0`) plutôt que flasher le `factory-cst3530.bin` précompilé de LilyGo, non repris ici. Ce binaire est compilé avec `HYN_POWER_ON_UPDATA = 1` : son firmware tactile embarqué a la même version que celui de la puce de cette carte (`1010001`), il ne devrait donc pas la reprogrammer, sauf si la puce avait une version plus ancienne ou un démarrage en échec.
 
 La CST3530 de cette carte s'identifie ainsi au démarrage (messages `[HYN]` du pilote sur le port série) : `ictype:caca220e`, `fw_project_id:2601093`, firmware de la puce `fw_ver:1010001`.
 
@@ -64,7 +66,7 @@ Elle est pilotée par le pilote Hynitron fourni par LilyGo (`lib/hyn_driver_for_
 
 | Élément | Version |
 |---------|---------|
-| Plateforme PlatformIO | `espressif32` 7.0.1 (non figée dans `platformio.ini`) |
+| Plateforme PlatformIO | `espressif32` 7.0.1 (figée dans `platformio.ini`) |
 | Framework | Arduino-ESP32 2.0.17 (ESP-IDF 4.4) |
 | LVGL | 8.3.0-dev, fournie dans `lib/lvgl` |
 | Pilote tactile | Hynitron V2.10 (20241111), fourni dans `lib/hyn_driver_for_esp32` |
@@ -143,7 +145,7 @@ lib/
 └── hyn_driver_for_esp32/  # Pilote tactile Hynitron/LilyGo (HYN_POWER_ON_UPDATA = 0)
 ```
 
-Les autres dossiers de `examples/` et de `lib/` (`Arduino_GFX`, `Arduino_DriveBus`, `XPowersLib`) viennent du dépôt LilyGo d'origine et ne servent pas à `sys_monitor`.
+Les autres dossiers de `examples/` et de `lib/` (`Arduino_GFX`, `Arduino_DriveBus`, `XPowersLib`) viennent du dépôt LilyGo d'origine et ne servent pas à `sys_monitor`. `examples/ESPHome_LVGL_HelloWorld/` est une configuration ESPHome (YAML), hors PlatformIO. La datasheet du CST3530 (en chinois) est dans `datasheet/`.
 
 ---
 
