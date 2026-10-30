@@ -1,6 +1,7 @@
 #pragma once
 
 #include "stdint.h"
+#include <stddef.h>
 #include "pins_config.h"
 #include "lvgl.h"/* https://github.com/lvgl/lvgl.git */
 
@@ -29,3 +30,8 @@ void lcd_sleep();
 void lcd_wake();
 
 bool get_lcd_spi_dma_write(void);
+
+// État de l'envoi DMA, modifié aussi par l'interruption de fin de transaction :
+// transactions en vol et pixels restant à mettre en file (0 et 0 = écran libre).
+extern volatile uint32_t transfer_num;
+extern volatile size_t   lcd_PushColors_len;

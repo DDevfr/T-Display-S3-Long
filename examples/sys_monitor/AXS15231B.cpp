@@ -5,9 +5,27 @@
 // Pilote AXS15231B réduit au seul chemin utilisé : QSPI + DMA (pilote LilyGo
 // d'origine, branches SPI 4 fils / sans DMA / rotation / dessin direct retirées).
 
+// État de l'envoi DMA, partagé entre la tâche (lcd_PushColors, loop) et
+// l'interruption de fin de transaction (spi_dma_cd). Une interruption au milieu
+// de transfer_num++ perdait un décrément : le compteur restait à 1 et l'écran se
+// figeait (plus aucun appel à lv_timer_handler, puis blocage de screen_sleep).
+// Les écritures côté tâche se font donc interruptions masquées. Cela suffit :
+// l'interruption tourne sur le même cœur que loop() (allouée par
+// spi_bus_initialize, appelé depuis setup) et la tâche ne peut pas
+// l'interrompre. Un spinlock ne protégerait en plus que d'un autre cœur.
 static volatile bool lcd_spi_dma_write = false;
-uint32_t transfer_num = 0;
-size_t lcd_PushColors_len = 0;
+volatile uint32_t transfer_num = 0;
+volatile size_t lcd_PushColors_len = 0;
+
+static inline uint32_t dma_state_lock(void)
+{
+    return portSET_INTERRUPT_MASK_FROM_ISR();
+}
+
+static inline void dma_state_unlock(uint32_t prev_level)
+{
+    portCLEAR_INTERRUPT_MASK_FROM_ISR(prev_level);
+}
 
 const static lcd_cmd_t axs15231b_qspi_init[] = {
     {0x28, {0x00}, 0x40},
@@ -140,11 +158,13 @@ void lcd_PushColors(uint16_t x,
 
     if(data != NULL && (width != 0) && (high != 0))
     {
-        lcd_PushColors_len = width * high;
         p = (uint16_t *)data;
         first_send = 1;
 
+        uint32_t irq = dma_state_lock();
+        lcd_PushColors_len = width * high;
         transfer_num = 0;
+        dma_state_unlock(irq);
         lcd_address_set(x, y, x + width - 1, y + high - 1);
         TFT_CS_L;
     }
@@ -184,11 +204,12 @@ void lcd_PushColors(uint16_t x,
         t.base.tx_buffer = p;
         t.base.length = chunk_size * 16;
 
+        uint32_t irq = dma_state_lock();
         lcd_spi_dma_write = true;
-
         transfer_num++;
-        transfer_num_old++;
         lcd_PushColors_len -= chunk_size;
+        dma_state_unlock(irq);
+        transfer_num_old++;
 
         ESP_ERROR_CHECK(spi_device_queue_trans(spi, (spi_transaction_t *)&t, portMAX_DELAY));
 

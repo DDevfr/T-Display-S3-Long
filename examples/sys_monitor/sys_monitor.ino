@@ -87,9 +87,6 @@ static bool procs_seen = false;   // trames P: reçues récemment
 #define BL_PWM_CHANNEL 0
 #define BL_BRIGHTNESS  153   // 0–255 ; 153 ≈ 60 %
 
-extern uint32_t transfer_num;
-extern size_t   lcd_PushColors_len;
-
 // ── Veille écran (pilotée par le champ SCR du NUC) ────────────────────────────
 static bool screen_asleep = false;
 
