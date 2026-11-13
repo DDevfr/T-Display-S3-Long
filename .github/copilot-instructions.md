@@ -35,7 +35,7 @@ Le détail (protocole, matériel, choix techniques, dépannage) est dans `README
 ## Conventions de code
 
 - Code et commentaires en français, identifiants en anglais ; suivre le style du fichier modifié.
-- Python : dépendances optionnelles (`dbus`, Pillow, GdkPixbuf) importées dans un `try/except ImportError`, la fonction se désactive si absente. Les lectures lentes sont mises en cache avec le motif `_X_CACHE` / `_X_NEXT` / `_X_INTERVAL` et `time.monotonic()`. Les chemins sysfs/hwmon sont résolus une fois au démarrage.
+- Python : dépendances optionnelles (`dbus`, Pillow, GdkPixbuf) importées dans un `try/except ImportError`, la fonction se désactive si absente. Les lectures lentes sont mises en cache avec le motif `_X_CACHE` / `_X_NEXT` / `_X_INTERVAL` et `time.monotonic()`. Les chemins sysfs/hwmon sont résolus une fois au démarrage ; ceux qui peuvent apparaître après le lancement du service au boot (pilote amdgpu, interface WiFi) sont recherchés à nouveau de façon throttlée tant qu'ils manquent.
 - Firmware : `lv_snprintf` ne gère pas `%f` (convertir en entier). Couleurs via les `CLR_*` de `ui.cpp`. Écrans non défilables (un glissé tactile pousserait le contenu hors de l'écran). Ne pas inclure l'en-tête du pilote Hynitron dans le `.ino` (il redéfinit `bool`, `NULL`, `HIGH`).
 - Port série ouvert en raw `VMIN=0` : ne lire que si `select()` le signale lisible.
 

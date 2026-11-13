@@ -502,7 +502,7 @@ The `CPU:` (0.25 s), `P:` (1 s) and `I:` (on request) frames do not interfere:
 - **CPU frequency**: average of `/sys/devices/system/cpu/cpu*/cpufreq/scaling_cur_freq` (kHz, paths resolved at startup; this is what `psutil.cpu_freq()` averages, used as fallback); sent × 10 to keep one decimal as an integer (e.g. 32 = 3.2 GHz). Decoded on the firmware side by dividing by 10.
 - **Package power (`CPWR`)**: read from `power1_average` of the amdgpu hwmon (PPT), RAPL as fallback. See [Power measurement (wattage)](#power-measurement-wattage).
 - **LVGL %f**: `lv_snprintf` (LVGL 8.3) does not support `%f`. All float values are converted to integers before formatting (`(int)(val + 0.5f)`).
-- **VRAM source**: `/sys/class/drm/card1/device/mem_info_vram_used` and `mem_info_vram_total` (amdgpu driver, no ROCm needed).
+- **VRAM source**: `/sys/class/drm/card1/device/mem_info_vram_used` and `mem_info_vram_total` (amdgpu driver, no ROCm needed). Like `gpu_busy_percent` and the amdgpu hwmon, these paths are resolved at startup; if the driver is not ready yet (service started at boot before amdgpu finished initializing), the script looks for them again every 5 s.
 - **NVMe temp**: `/sys/class/nvme/nvme0/hwmon*/temp1_input` (millidegrees → divided by 1000).
 - **VPN detection**: `psutil.net_if_stats()`, 1×/s (`_VPN_INTERVAL`), value cached in between. Criteria, compatibility and limits: see [VPN detection](#vpn-detection).
 - **WiFi**: SSID and signal strength of the active access point are read from NetworkManager on the system D-Bus (`Device.Wireless.ActiveAccessPoint` → `AccessPoint.Ssid` / `Strength`), every 5 s (`_WIFI_INTERVAL`): NetworkManager only refreshes the strength when it scans. Previously, the script ran `nmcli` 4×/s: more than half of the service's CPU went into these processes, and `nmcli` sometimes took several seconds to answer (empty SSID). `nmcli` is now only a fallback if `python3-dbus` is missing, run with `LC_ALL=C` so as not to depend on the language (`yes`/`oui`).
@@ -556,6 +556,9 @@ sudo systemctl status nuc-monitor
 
 **The power (`nnW`) does not show next to the CPU frequency**
 → The script sends `CPWR:0`, which the screen hides. Check the `Puissance` preflight line (`sudo journalctl -u nuc-monitor | grep Puissance`): `n/a` means neither amdgpu PPT nor RAPL is readable. Check `cat /sys/class/drm/card*/device/hwmon/hwmon*/power1_average` (see [Power measurement](#power-measurement-wattage)). A service started with an old version of the script (which only read RAPL, root-only) always shows 0: redeploy with `bash tools/deploy.sh --no-flash`.
+
+**The VRAM gauge stays at 0 (or the GPU usage, or the power)**
+→ Check the `VRAM GPU`, `Usage GPU` and `Puissance` preflight lines (`sudo journalctl -u nuc-monitor -b | grep -E "VRAM|Usage GPU|Puissance|amdgpu"`). `MANQUANT` (`n/a` for `Puissance`) while the driver initialized just after the service started (`sudo journalctl -k -b | grep "Initialized amdgpu"`): the service started too early. The script then looks for the files every 5 s and logs `amdgpu prêt` as soon as it finds them. An older version of the script did not look again: the gauge stayed at 0 until `sudo systemctl restart nuc-monitor`. Redeploy with `bash tools/deploy.sh --no-flash`.
 
 **Screen 2 stays empty or icons stay as badges**
 → Empty screen 2: the Python script has not sent a `P:` frame for 5 s (old script version, or script stopped); rerun `bash tools/deploy.sh --no-flash`. Permanent badges: Pillow is missing (`sudo apt install python3-pil`), or the app has no icon that can be found; the badge is then the normal behavior. Already rendered icons are in `~/.cache/nuc-monitor/icons/`, and this folder can be deleted safely.

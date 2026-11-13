@@ -59,14 +59,50 @@ def _find_sysfs(pattern: str) -> str | None:
     matches = glob.glob(pattern)
     return matches[0] if matches else None
 
-_GPU_BUSY_PATH  = _find_sysfs("/sys/class/drm/card*/device/gpu_busy_percent")
-_GPU_TEMP_PATH  = _find_sysfs("/sys/class/drm/card*/device/hwmon/hwmon*/temp1_input")
-# PPT (Package Power Tracking) de l'APU, publié par amdgpu et lisible sans root :
-# puissance du socket entier (cœurs + iGPU + SoC), moyennée par le SMU sur ~1 s
-# (power1_input, instantané, retombe parfois à 0 W en pleine charge).
-_PPT_PATH       = _find_sysfs("/sys/class/drm/card*/device/hwmon/hwmon*/power1_average")
-_VRAM_USED_PATH = _find_sysfs("/sys/class/drm/card*/device/mem_info_vram_used")
-_VRAM_TOTAL_PATH= _find_sysfs("/sys/class/drm/card*/device/mem_info_vram_total")
+_GPU_BUSY_PATH   = None
+_GPU_TEMP_PATH   = None
+_PPT_PATH        = None
+_VRAM_USED_PATH  = None
+_VRAM_TOTAL_PATH = None
+# Au boot, le service peut démarrer avant la fin de l'initialisation d'amdgpu
+# (constaté : 0,4 s d'avance) : ses fichiers sysfs n'existent pas encore et la
+# VRAM, l'usage GPU et la puissance resteraient à 0 jusqu'au prochain redémarrage
+# du service. Tant qu'il en manque, collect() relance la recherche toutes les
+# _AMDGPU_RETRY_INTERVAL secondes (quelques glob, coût négligeable).
+_AMDGPU_RETRY_INTERVAL = 5.0
+_AMDGPU_NEXT           = 0.0
+
+def _resolve_amdgpu_paths() -> None:
+    """(Re)cherche les fichiers sysfs publiés par le pilote amdgpu."""
+    global _GPU_BUSY_PATH, _GPU_TEMP_PATH, _PPT_PATH, _VRAM_USED_PATH, _VRAM_TOTAL_PATH
+    _GPU_BUSY_PATH   = _find_sysfs("/sys/class/drm/card*/device/gpu_busy_percent")
+    _GPU_TEMP_PATH   = _find_sysfs("/sys/class/drm/card*/device/hwmon/hwmon*/temp1_input")
+    # PPT (Package Power Tracking) de l'APU, publié par amdgpu et lisible sans root :
+    # puissance du socket entier (cœurs + iGPU + SoC), moyennée par le SMU sur ~1 s
+    # (power1_input, instantané, retombe parfois à 0 W en pleine charge).
+    _PPT_PATH        = _find_sysfs("/sys/class/drm/card*/device/hwmon/hwmon*/power1_average")
+    _VRAM_USED_PATH  = _find_sysfs("/sys/class/drm/card*/device/mem_info_vram_used")
+    _VRAM_TOTAL_PATH = _find_sysfs("/sys/class/drm/card*/device/mem_info_vram_total")
+
+def _amdgpu_ready() -> bool:
+    # PPT exclu : power1_average n'existe pas sur tous les APU / noyaux, son absence
+    # ne doit pas faire relancer la recherche indéfiniment (repli RAPL de toute façon).
+    return bool(_GPU_BUSY_PATH and _GPU_TEMP_PATH and _VRAM_USED_PATH and _VRAM_TOTAL_PATH)
+
+def _retry_amdgpu_paths() -> None:
+    """Relance la recherche (throttlée) si amdgpu n'était pas prêt au démarrage."""
+    global _AMDGPU_NEXT
+    if _amdgpu_ready():
+        return
+    now = time.monotonic()
+    if now < _AMDGPU_NEXT:
+        return
+    _AMDGPU_NEXT = now + _AMDGPU_RETRY_INTERVAL
+    _resolve_amdgpu_paths()
+    if _amdgpu_ready():
+        print("amdgpu prêt — usage GPU, VRAM et puissance lus via sysfs", flush=True)
+
+_resolve_amdgpu_paths()
 
 def _find_hwmon_temp(name: str, labels: tuple[str, ...]) -> str | None:
     """tempN_input du capteur hwmon `name` dont le label est dans `labels`."""
@@ -747,6 +783,7 @@ def get_display_off() -> bool | None:
 
 
 def collect() -> dict:
+    _retry_amdgpu_paths()
     vm      = psutil.virtual_memory()
     cores   = psutil.cpu_percent(percpu=True)
     cores16 = (cores + [0.0] * 16)[:16]
