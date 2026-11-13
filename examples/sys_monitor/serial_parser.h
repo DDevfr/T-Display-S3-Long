@@ -20,6 +20,8 @@ struct SysData {
     float ssd2_used_gb;
     float ssd2_total_gb;
     uint8_t ssd2_health;
+    float ssd2_read_mbps;   // KB/s, comme ssd_read_mbps
+    float ssd2_write_mbps;
     float vram_used_mb;
     float vram_total_mb;
     char  wifi_ssid[9];
@@ -50,6 +52,8 @@ inline bool parse_sysdata(const char *line, SysData *out) {
     out->ssd2_temp = 0.0f;
     out->ssd2_used_gb = 0.0f;
     out->ssd2_total_gb = 0.0f;
+    out->ssd2_read_mbps  = 0.0f;
+    out->ssd2_write_mbps = 0.0f;
     out->net_total_kbps = 0.0f;
     out->cpu_freq_ghz = 0.0f;
     out->cpu_power_w  = 0;
@@ -88,6 +92,8 @@ inline bool parse_sysdata(const char *line, SysData *out) {
         else if (strcmp(key, "S2CAP")== 0) out->ssd2_used_gb    = val;
         else if (strcmp(key, "S2TOT")== 0) out->ssd2_total_gb   = val;
         else if (strcmp(key, "S2HLTH")== 0) out->ssd2_health    = (uint8_t)val;
+        else if (strcmp(key, "S2RD") == 0) out->ssd2_read_mbps  = val;
+        else if (strcmp(key, "S2WR") == 0) out->ssd2_write_mbps = val;
         else if (strcmp(key, "VUSED")== 0) out->vram_used_mb    = val;
         else if (strcmp(key, "VTOT") == 0) out->vram_total_mb  = val;
         else if (strcmp(key, "WNAM") == 0) {

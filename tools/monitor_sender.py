@@ -921,6 +921,8 @@ def format_line(d: dict) -> str:
         f"S2CAP:{d['ssd2_used']}",
         f"S2TOT:{d['ssd2_total']}",
         f"S2HLTH:{d['ssd2_health']}",
+        f"S2RD:{int(d['ssd2_read']*1024)}",
+        f"S2WR:{int(d['ssd2_write']*1024)}",
         f"VUSED:{d['vram_used']:.0f}",
         f"VTOT:{d['vram_total']:.0f}",
         f"WNAM:{d['wifi_ssid']}",

@@ -28,7 +28,7 @@ Le détail (protocole, matériel, choix techniques, dépannage) est dans `README
 ## Protocole série
 
 - Trame principale : `CLE:val,CLE:val,...,CX:c0;c1;...;c15` (16 valeurs CPU, une par thread : ne jamais moyenner par cœur physique). Trames annexes `P:` (top processus), `I:` (icônes), `?I:` (demande ESP32 → PC).
-- Ligne de 510 octets max (tampon de 512 dans `serial_parser.h`) : vérifier le budget (pire cas ~415 octets) avant tout ajout de champ. Les chaînes envoyées doivent être nettoyées de `,` et `:`.
+- Ligne de 510 octets max (tampon de 512 dans `serial_parser.h`) : vérifier le budget (pire cas ~445 octets) avant tout ajout de champ. Les chaînes envoyées doivent être nettoyées de `,` et `:`.
 - Ajouter une métrique = modifier ensemble : `collect()` et `format_line()` dans `monitor_sender.py`, la struct `SysData` et le parsing dans `serial_parser.h`, l'affichage dans `ui.cpp`, le tableau des clés dans les deux README.
 - Valeur « indisponible » : une sentinelle (`255`, `0`) que le firmware masque, jamais une erreur.
 
