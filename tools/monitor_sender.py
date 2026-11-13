@@ -127,12 +127,20 @@ _CPU_FREQ_PATHS = sorted(glob.glob("/sys/devices/system/cpu/cpu[0-9]*/cpufreq/sc
 
 _UPDATES_PATH   = '/var/lib/update-notifier/updates-available'
 
-# ── Détection disques SSD (au démarrage) ─────────────────────────────────────
+# ── Détection disques SSD (au démarrage, puis re-vérifiée) ───────────────────
 _disk_prev      = {}   # {devname: SDiskIOCounters}
 _disk_prev_time = None
 _SSD_DEVICES    = []   # ['nvme0n1', 'sda'] — jusqu'à 2 devices
 _SSD_TEMP_PATHS = []   # [path|None, ...]
-_SSD_MOUNTS     = []   # ['/', '/media/...']
+_SSD_MOUNTS     = []   # ['/', '/media/...'] — None : SSD2 pas (encore) monté
+_SSD_SYSFS_IDS  = []   # realpath de /sys/class/block/<dev> : change si le disque est renuméroté
+# Le nom d'un disque USB n'est pas stable : une réinitialisation du bus USB le
+# renumérote (constaté : sdc → sda en cours de session), et il n'est automonté
+# qu'à l'ouverture de session, après le démarrage du service. La détection est
+# vérifiée toutes les _SSD_RECHECK_INTERVAL s (quelques stat/readlink) et refaite
+# seulement si elle est périmée.
+_SSD_RECHECK_INTERVAL = 5.0
+_SSD_RECHECK_NEXT     = 0.0
 
 _NET_IFACE      = ''        # interface WiFi active (ex: 'wlp2s0')
 _net_iface_last_check = 0.0 # dernier essai de (re)détection si _NET_IFACE vide
@@ -192,35 +200,40 @@ def _detect_net_iface() -> None:
         pass
 
 
-def _detect_ssd_devices() -> None:
-    """Détecte les disques physiques (NVMe en premier, puis USB/SATA)."""
-    global _SSD_DEVICES, _SSD_TEMP_PATHS, _SSD_MOUNTS
-    _SSD_DEVICES = []; _SSD_TEMP_PATHS = []; _SSD_MOUNTS = []
+def _scan_ssd_devices() -> tuple[list, list, list, list]:
+    """Détecte les disques physiques : NVMe en premier, puis USB/SATA, les disques
+    fixes avant les amovibles (clé USB, lecteur de cartes), qui ne doivent pas
+    prendre la place de SSD2 en cas de renumérotation.
+    Renvoie (devices, mounts, temp_paths, sysfs_ids), sans rien modifier."""
     try:
         counters = psutil.disk_io_counters(perdisk=True) or {}
     except Exception:
         counters = {}
     pat = re.compile(r'^(nvme\d+n\d+|[sh]d[a-z])$')
 
-    def _dev_size(dev):
+    def _sys_int(dev, attr):
         try:
-            return int(open(f'/sys/class/block/{dev}/size').read()) * 512
+            return int(open(f'/sys/class/block/{dev}/{attr}').read())
         except Exception:
             return 0
 
     devices = sorted(
-        [d for d in counters if pat.match(d) and _dev_size(d) >= 1024**3],
-        key=lambda n: (0 if n.startswith('nvme') else 1, n)
+        [d for d in counters if pat.match(d) and _sys_int(d, 'size') * 512 >= 1024**3],
+        key=lambda n: (0 if n.startswith('nvme') else 1, _sys_int(n, 'removable'), n)
     )[:2]
     partitions = {p.device.replace('/dev/', ''): p.mountpoint
                   for p in psutil.disk_partitions(all=False)}
-    for dev in devices:
+    mounts, temp_paths, sysfs_ids = [], [], []
+    for i, dev in enumerate(devices):
         mount = partitions.get(dev)
         if mount is None:
             for pdev, mnt in partitions.items():
                 if pdev.startswith(dev):
                     mount = mnt; break
-        _SSD_MOUNTS.append(mount or '/')
+        # SSD1 non trouvé : '/' (racine sur LVM/LUKS, montée sous /dev/mapper).
+        # SSD2 non monté : None plutôt que '/', sinon il affiche la capacité de la
+        # racine ; il est re-détecté jusqu'à son montage (cf. _recheck_ssd_devices).
+        mounts.append(mount if mount is not None or i > 0 else '/')
         temp_path = None
         if dev.startswith('nvme'):
             nvme_id = re.match(r'(nvme\d+)', dev).group(1)
@@ -229,8 +242,57 @@ def _detect_ssd_devices() -> None:
         else:
             cands = glob.glob(f"/sys/class/block/{dev}/device/hwmon*/temp1_input")
             temp_path = cands[0] if cands else None
-        _SSD_TEMP_PATHS.append(temp_path)
-    _SSD_DEVICES = devices
+        temp_paths.append(temp_path)
+        sysfs_ids.append(os.path.realpath(f'/sys/class/block/{dev}'))
+    return devices, mounts, temp_paths, sysfs_ids
+
+
+def _apply_ssd_layout(layout: tuple[list, list, list, list]) -> None:
+    """Installe une détection de disques et oublie l'état lié aux anciens noms."""
+    global _SSD_DEVICES, _SSD_MOUNTS, _SSD_TEMP_PATHS, _SSD_SYSFS_IDS
+    global _disk_prev, _disk_prev_time
+    global _SSD_HEALTH_DRIVE_PATH, _SSD2_HEALTH_DRIVE_PATH
+    global _ssd_health_cache_time, _ssd2_smart_cache_time
+    _SSD_DEVICES, _SSD_MOUNTS, _SSD_TEMP_PATHS, _SSD_SYSFS_IDS = layout
+    _disk_prev, _disk_prev_time = {}, None
+    # Chemins D-Bus SMART résolus à partir des noms de disques : relus au prochain appel.
+    _SSD_HEALTH_DRIVE_PATH = _SSD2_HEALTH_DRIVE_PATH = None
+    _ssd_health_cache_time = _ssd2_smart_cache_time = 0.0
+
+
+def _detect_ssd_devices() -> None:
+    """Détection initiale des disques (au démarrage)."""
+    _apply_ssd_layout(_scan_ssd_devices())
+
+
+def _ssd_layout_stale() -> bool:
+    """Vrai si la détection est à refaire : disque disparu ou renuméroté (son chemin
+    sysfs a changé), point de montage absent ou démonté, ou moins de 2 disques."""
+    if len(_SSD_DEVICES) < 2:
+        return True
+    if any(m is None or not os.path.ismount(m) for m in _SSD_MOUNTS):
+        return True
+    return any(os.path.realpath(f'/sys/class/block/{dev}') != sid
+               for dev, sid in zip(_SSD_DEVICES, _SSD_SYSFS_IDS))
+
+
+def _recheck_ssd_devices() -> None:
+    """Vérification throttlée de la détection des disques ; nouvelle détection
+    seulement si elle est périmée, appliquée et journalisée seulement si elle change."""
+    global _SSD_RECHECK_NEXT
+    now = time.monotonic()
+    if now < _SSD_RECHECK_NEXT:
+        return
+    _SSD_RECHECK_NEXT = now + _SSD_RECHECK_INTERVAL
+    if not _ssd_layout_stale():
+        return
+    layout = _scan_ssd_devices()
+    if layout == (_SSD_DEVICES, _SSD_MOUNTS, _SSD_TEMP_PATHS, _SSD_SYSFS_IDS):
+        return
+    _apply_ssd_layout(layout)
+    desc = ", ".join(f"SSD{i+1} {dev} ({m or 'non monté'})"
+                     for i, (dev, m) in enumerate(zip(_SSD_DEVICES, _SSD_MOUNTS)))
+    print(f"Disques re-détectés : {desc or 'aucun'}", flush=True)
 
 
 def _block_drive_path(dev: str):
@@ -499,6 +561,9 @@ def get_ssd_capacities() -> list[tuple[int, int]]:
     """(used_gb, total_gb) pour chaque SSD."""
     caps = []
     for mount in _SSD_MOUNTS:
+        if mount is None:       # SSD2 pas (encore) monté → "--/-- GB" côté écran
+            caps.append((0, 0))
+            continue
         try:
             u = psutil.disk_usage(mount)
             caps.append((int(u.used / 1024**3), int(u.total / 1024**3)))
@@ -784,6 +849,7 @@ def get_display_off() -> bool | None:
 
 def collect() -> dict:
     _retry_amdgpu_paths()
+    _recheck_ssd_devices()
     vm      = psutil.virtual_memory()
     cores   = psutil.cpu_percent(percpu=True)
     cores16 = (cores + [0.0] * 16)[:16]
@@ -954,6 +1020,7 @@ def preflight_check(port: str) -> None:
     if _SSD_DEVICES:
         for i, dev in enumerate(_SSD_DEVICES):
             mount = _SSD_MOUNTS[i] if i < len(_SSD_MOUNTS) else '?'
+            mount = mount or 'non monté (re-détecté toutes les 5 s)'
             temp_src = _SSD_TEMP_PATHS[i] if i < len(_SSD_TEMP_PATHS) else None
             caps = get_ssd_capacities()
             cap = caps[i] if i < len(caps) else (0, 0)
