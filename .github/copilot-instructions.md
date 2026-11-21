@@ -16,7 +16,7 @@ Le détail (protocole, matériel, choix techniques, dépannage) est dans `README
 - Compiler : `~/.platformio/penv/bin/pio run -e sys_monitor` (`pio` n'est pas dans le PATH).
 - Flasher + redémarrer le service : `bash tools/deploy.sh` ; Python seul : `bash tools/deploy.sh --no-flash`. Ces scripts demandent sudo.
 - Tester le script à la main : `sudo bash tools/dev-mode.sh`, puis `python3 tools/monitor_sender.py`, puis `sudo bash tools/dev-mode.sh resume`.
-- Pas de suite de tests. Vérifier au minimum `python3 -m py_compile tools/*.py` et la compilation du firmware ; le preflight du script (au démarrage) vérifie chaque source de métrique.
+- Pas de suite de tests. Vérifier au minimum `python3 -m py_compile tools/*.py` et la compilation du firmware ; le preflight du script (au démarrage) vérifie les sources de métriques, sauf les piles clavier/souris (UPower).
 
 ## Règles impératives
 

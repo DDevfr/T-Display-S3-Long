@@ -31,7 +31,7 @@ Metrics are sent from the NUC to the ESP32 over USB-Serial (CSV) by the Python s
 | Flash | 16 MB QIO at 80 MHz, partitioned as `huge_app.csv` (3 MB application) |
 | Display | 180×640 px, **AXS15231B** controller over QSPI at 32 MHz, PWM backlight |
 | Touch | **CST3530** (Hynitron), I2C, chip separate from the display |
-| Battery charger | **BQ25896** (Texas Instruments), I2C `0x6A` |
+| Battery charger | **SY6970** (per the LilyGo schematics and the `factory` example), I2C `0x6A` |
 | USB | Type-C, native ESP32-S3 USB-Serial-JTAG (VID:PID `303A:1001`), seen as `/dev/ttyACM0` |
 | Buttons | BOOT (GPIO0, used as screen toggle) and RST |
 
@@ -43,7 +43,7 @@ Metrics are sent from the NUC to the ESP32 over USB-Serial (CSV) by the Python s
 | Display QSPI: D0 / D1 / D2 / D3 | 13 / 18 / 21 / 14 |
 | Display: reset | 16 |
 | Backlight (LEDC channel 0, 5 kHz) | 1 |
-| I2C (touch + BQ25896): SDA / SCL | 15 / 10 |
+| I2C (touch + SY6970): SDA / SCL | 15 / 10 |
 | Touch: INT / reset | 11 / 2 |
 | BOOT button | 0 |
 
@@ -56,9 +56,9 @@ LilyGo changed the touch controller during production without renaming the board
 | Old revision | Built into the AXS15231B | `0x3B` | GPIO16 (shared with the display) | `master` branch, `touch` example |
 | CST3530 revision (this board) | Separate **CST3530** | `0x58` (`0x5A` in bootloader) | **GPIO2** | `T-Display-S3-Long-cst3530` branch, `cst3530_touch` example |
 
-This project only supports the CST3530 revision. The LilyGo examples in `examples/` (`factory`, `lvgl_demo`, `TFT`, `QWIIC_Sensor`, `cst3530_touch`) are taken from the `T-Display-S3-Long-cst3530` branch (synced on 2026-10-23) and target this revision. Only `GFX_AXS15231B_Image`, identical in both branches, still queries the old touch controller.
+This project only supports the CST3530 revision. The LilyGo examples in `examples/` (`factory`, `lvgl_demo`, `TFT`, `QWIIC_Sensor`, `cst3530_touch`) are taken from the `T-Display-S3-Long-cst3530` branch (synced on 2026-10-23). `factory`, `lvgl_demo`, `TFT` and `cst3530_touch` target this revision. `QWIIC_Sensor` and `GFX_AXS15231B_Image` (identical in both branches) still query the old touch controller at `0x3B`.
 
-To restore the factory firmware, rebuild the `factory` example (it inherits `HYN_POWER_ON_UPDATA = 0`) rather than flashing LilyGo's prebuilt `factory-cst3530.bin`, which is not included here. That binary is built with `HYN_POWER_ON_UPDATA = 1`: its embedded touch firmware has the same version as the chip on this board (`1010001`), so it should not reflash it, unless the chip had an older version or a failed boot.
+To restore the factory firmware, rebuild the `factory` example (it inherits `HYN_POWER_ON_UPDATA = 0`) rather than flashing LilyGo's prebuilt `factory-cst3530.bin`, which is not included here. That binary is built with `HYN_POWER_ON_UPDATA = 1`: its embedded touch firmware has the same version as the chip on this board (`1010001`), so it should not reflash it, unless the chip had an older version or a failed boot. The `firmware/factory.bin` inherited from the LilyGo repository does not contain the CST3530 driver, so it does not handle this revision's touch controller.
 
 The CST3530 of this board identifies itself at boot (driver `[HYN]` messages on the serial port): `ictype:caca220e`, `fw_project_id:2601093`, chip firmware `fw_ver:1010001`.
 
@@ -94,15 +94,15 @@ The Hynitron driver is written for ESP-IDF 4.4 (legacy I2C driver, pre-IDF 5 Fre
 │ [▮▮▮]       GPU              [▮  ]   │  ← "GPU" + "Radeon 780M" below; colored battery icon
 │ 100%                          20%    │  ← battery %: green ≥ 60, yellow ≥ 35, orange ≥ 15, red < 15
 ├──────────────────────────────────────┤
-│ RAM          14/62 GB                │  ← label left, value right, bar below
+│ RAM        14.2/62 GB                │  ← label left, value right, bar below
 | [════════]                           |
-│ VRAM          1/8 GB                 │  ← same, iGPU VRAM
+│ VRAM        1.4/8 GB                 │  ← same, iGPU VRAM
 | [════════]                           |
 ├──────────────────────────────────────┤
 │ SSD1 100%  38°C          123/1832 GB │  ← SSD1 title, SMART health, centered temp, capacity right
-│  R - W  [══════]             16 KB/s │  ← R and W green when active (> 512 KB/s), gauge centered between both texts
-│ SSD2 100%   32°C           480/1863GB│  ← same for SSD2 (health + temp + capacity), block hidden if `S2HLTH = 255`
-│  R - W  [══════]            340 KB/s │  ← SSD2 throughput, same gauge as SSD1
+│  R - W  [══════]            102 KB/s │  ← R and W green when active (> 512 KB/s), gauge centered between both texts
+│ SSD2 100%  32°C          480/1863 GB │  ← same for SSD2 (health + temp + capacity), block hidden if `S2HLTH = 255`
+│  R - W  [══════]            307 KB/s │  ← SSD2 throughput, same gauge as SSD1
 │      Zorin OS 18.1 (6.17.040)        │  ← status line (bottom): OSKV when connected, alternating every 5 s with "N maj disponibles" (orange) if there are updates; otherwise "En attente du PC..." (waiting for the PC)
 └──────────────────────────────────────┘
 ```
@@ -147,7 +147,7 @@ lib/
 └── hyn_driver_for_esp32/  # Hynitron/LilyGo touch driver (HYN_POWER_ON_UPDATA = 0)
 ```
 
-The other folders of `examples/` and `lib/` (`Arduino_GFX`, `Arduino_DriveBus`, `XPowersLib`) come from the original LilyGo repository and are not used by `sys_monitor`. `examples/ESPHome_LVGL_HelloWorld/` is an ESPHome configuration (YAML), outside PlatformIO. The CST3530 datasheet (in Chinese) is in `datasheet/`.
+The other folders of `examples/` and `lib/` (`Arduino_GFX-1.3.7`, `Arduino_DriveBus-1.1.12`, `XPowersLib`) come from the original LilyGo repository and are not used by `sys_monitor`. `examples/ESPHome_LVGL_HelloWorld/` is an ESPHome configuration (YAML), outside PlatformIO. The AXS15231B, CST3530 (in Chinese) and SY6970 datasheets are in `datasheet/`.
 
 ---
 
@@ -172,7 +172,7 @@ CX:55;12;8;6;4;3;2;1;78;45;12;8;5;3;2;1
 | `GTEMP` | GPU temperature °C (amdgpu/edge, integer) |
 | `RAM` | RAM used % (integer) |
 | `RTOT` | Total RAM in GB (integer) |
-| `SREAD` / `SWRIT` | SSD1 (NVMe) read/write throughput in **KB/s** (integer, sub-MB/s precision) |
+| `SREAD` / `SWRIT` | SSD1 (NVMe) read/write throughput in **KB/s** (integer, in 0.1 MB/s steps, i.e. ~102 KB/s) |
 | `STEMP` | SSD1 temperature °C (nvme hwmon sysfs, integer) |
 | `SCAP` / `STOT` | SSD1 used / total space in GB |
 | `SHLTH` | SSD1 SMART health % (`100 - percent_used`, via UDisks2/D-Bus, no root). `255` = unavailable (no NVMe, or D-Bus/UDisks2 missing), not shown on screen in that case |
@@ -191,7 +191,7 @@ CX:55;12;8;6;4;3;2;1;78;45;12;8;5;3;2;1
 | `OSKV` | OS name + version + shortened kernel, e.g. `Zorin OS 18.1 (6.17.040)` (max 40 chars, shown on the bottom line when connected, alternating with `N maj disponibles` if `UPD > 0`) |
 | `UPD` | Number of available updates (`/var/lib/update-notifier/updates-available`, refreshed ~1-2×/day by `apt-daily.timer`, not real time). If > 0, `N maj disponibles` (orange) alternates every 5 s with the OS name on the bottom line |
 | `SCR` | Requested ESP32 screen state: `1` = on, `0` = standby (backlight off + AXS15231B asleep). Missing → `1` |
-| `KBAT` / `MBAT` | Keyboard / mouse battery % (UPower via system D-Bus, no root, refreshed every 60 s). `255` = absent → empty column. Sorted by model name (`K780`, `MX Anywhere`…) because UPower reports the Logitech HID++ mouse as type *keyboard* |
+| `KBAT` / `MBAT` | Keyboard / mouse battery % (UPower via system D-Bus, no root, refreshed every 60 s, and every 2 s for 15 s when the NUC screen turns back on). A temporarily absent device keeps its last value for 24 h. `255` = never seen or not seen again for 24 h → empty column. Sorted by model name (`K780`, `MX Anywhere`…) because UPower reports the Logitech HID++ mouse as type *keyboard* |
 | `KCHG` / `MCHG` | `1` = device charging → lightning icon instead of the battery |
 | `CX` | 16 per-core % values separated by `;` (e.g. `CX:55;12;8;...;1`) |
 
@@ -319,13 +319,13 @@ sudo apt install python3-pil python3-gi gir1.2-gdkpixbuf-2.0   # optional (alrea
 ### Run manually
 
 ```bash
-python tools/monitor_sender.py                     # auto-detects /dev/ttyACM*
-python tools/monitor_sender.py --port /dev/ttyACM0
-python tools/monitor_sender.py --interval 0.25     # 0.25 s refresh (default)
-python tools/monitor_sender.py --sleep-delay 600   # ESP32 standby 600 s after the NUC screen turns off (default, 0 = never)
+python3 tools/monitor_sender.py                     # auto-detects /dev/ttyACM*
+python3 tools/monitor_sender.py --port /dev/ttyACM0
+python3 tools/monitor_sender.py --interval 0.25     # 0.25 s refresh (default)
+python3 tools/monitor_sender.py --sleep-delay 600   # ESP32 standby 600 s after the NUC screen turns off (default, 0 = never)
 ```
 
-The script runs a preflight check at startup (port, CPU/GPU/SSD temp, SMART health, WiFi, VPN, RAM, VRAM, SSD, power, screen standby) and reconnects automatically after a USB disconnect.
+The script runs a preflight check at startup (port, CPU/GPU/SSD temp, GPU usage, SMART health, WiFi, VPN, RAM, VRAM, SSD, power, screen standby, CPU threads) and reconnects automatically after a USB disconnect.
 
 ### Autostart (Zorin OS 18 / systemd)
 
@@ -369,7 +369,7 @@ The `sys_monitor` environment in `platformio.ini` enables `-DARDUINO_USB_CDC_ON_
 # Firmware changed (or firmware + Python):
 bash tools/deploy.sh
 
-# Python only (monitor_sender.py), no reflash needed:
+# Python only (monitor_sender.py, proc_top.py), no reflash needed:
 bash tools/deploy.sh --no-flash
 ```
 
@@ -377,8 +377,8 @@ bash tools/deploy.sh --no-flash
 `--no-flash`) → update the service file if changed → restart. Shows the systemd
 status at the end.
 
-Use `--no-flash` whenever only `monitor_sender.py` (or `nuc-monitor.service`)
-changed: it avoids recompiling/reflashing the ESP32 for nothing, and restarts the
+Use `--no-flash` whenever only the Python scripts (`monitor_sender.py`,
+`proc_top.py`) or `nuc-monitor.service` changed: it avoids recompiling/reflashing the ESP32 for nothing, and restarts the
 service with the up-to-date Python code in a few seconds.
 
 ### Interactive development (manual test of the Python script)
@@ -465,7 +465,7 @@ A **touch on the screen** or a press on the **BOOT button** (GPIO0) switches fro
 | No `P:` frame for 5 s | Screen 2 is cleared |
 
 **NUC side** (`tools/proc_top.py`):
-- CPU % is computed by reading `/proc/<pid>/stat` directly (~6 ms for ~480 processes, versus ~20 ms via psutil); name and executable are only read for the top 12.
+- CPU % is computed by reading `/proc/<pid>/stat` directly (~6 ms for ~480 processes, versus ~20 ms via psutil); the executable and cgroup are only read for the top 12.
 - A process's app is found, in order, by: the app id of the systemd scope (`app-gnome-brave\x2dbrowser-….scope` → `brave-browser.desktop`), provided the executable lives in the app's folder (so a `bash` started in the VS Code terminal keeps the generic icon); the executable name (`Exec=`, `StartupWMClass=`); the app's private folder (Brave helpers, placed in the `org.chromium.Chromium` scope, are recognized by `/opt/brave.com/brave/`).
 - The icon is looked up in the active theme (`org.gnome.desktop.interface icon-theme`, read without a graphical session since the service has no `DISPLAY`), its inherited themes, `hicolor` then `/usr/share/pixmaps`; loaded by GdkPixbuf (PNG/SVG/XPM) then converted by Pillow.
 - Lookup and rendering run in a separate thread: until an icon is ready, the hash sent is `0` and the ESP32 shows the badge. Renders are cached in `~/.cache/nuc-monitor/icons/` (key = path + modification date of the image). No external command is spawned.
@@ -497,18 +497,18 @@ The `CPU:` (0.25 s), `P:` (1 s) and `I:` (on request) frames do not interfere:
 - **HWCDC vs HardwareSerial**: the ESP32-S3 exposes `Serial` as HWCDC when `ARDUINO_USB_CDC_ON_BOOT=1`. Without this flag, `Serial.available()` always stays at 0.
 - **HWCDC serial buffer**: the software RX buffer is extended to 4096 bytes via `Serial.setRxBufferSize(4096)` (default = 256) to absorb a full icon (8 `I:` lines) during an LVGL render. The line buffer of `serial_parser.h` stays at 512 bytes. `Serial.setTxTimeoutMs(0)`: `?I:` requests never block if the PC is not reading. The Python script truncates lines over 510 bytes before sending. If a line is too long on the firmware side, `serial_read_line()` rejects the whole line (`overflow` flag) rather than parsing truncated data.
 - **Serial double-open**: opening `/dev/ttyACM0` on Linux triggers a USB-JTAG reset. The script opens the port twice (drain + close in between) to get a clean cdc-acm session.
-- **Compact protocol**: the 16 CPU cores are encoded in a single `CX:v;v;...;v` field (`;` separator) instead of 16 `C0`…`C15` fields. SSD throughput is in integer KB/s (not decimal MB/s) for better sub-MB/s precision. Typical message size: ~350 bytes measured, computed worst case ~445 bytes (40-char OSKV, 16 cores at 100 %, 7-digit SSD1 and SSD2 throughput, 6-digit network throughput), i.e. ~65 bytes of margin under the 510-byte buffer. Check this budget before adding any field.
+- **Compact protocol**: the 16 CPU cores are encoded in a single `CX:v;v;...;v` field (`;` separator) instead of 16 `C0`…`C15` fields. SSD throughput is sent in integer KB/s (not decimal MB/s), from a measurement rounded to 0.1 MB/s: it therefore moves in steps of ~102 KB/s. Typical message size: ~350 bytes measured, computed worst case ~445 bytes (40-char OSKV, 16 cores at 100 %, 7-digit SSD1 and SSD2 throughput, 6-digit network throughput), i.e. ~65 bytes of margin under the 510-byte buffer. Check this budget before adding any field.
 - **`OSKV` shortening**: the kernel version (`platform.release()`, e.g. `6.17.0-40-generic`) is compacted by dropping alphabetic segments (`generic`, `lowlatency`, ...) and concatenating the remaining numeric segments without a dash to the first segment: `6.17.0-40-generic` → `6.17.040`. The final `OS_NAME OS_VERSION (kernel)` string is truncated to 40 characters and stripped of `,`/`:` (protocol delimiters) before sending. Computed once at script startup (does not change while running).
 - **Network throughput EMA**: `get_net_avg_kbps()` computes total upload + download on the WiFi interface (`wl*`) and smooths it with an exponential moving average (α=0.25 ≈ ~1 s time constant). Shown in KB/s or MB/s depending on the rate, like a file-copy indicator.
 - **CPU frequency**: average of `/sys/devices/system/cpu/cpu*/cpufreq/scaling_cur_freq` (kHz, paths resolved at startup; this is what `psutil.cpu_freq()` averages, used as fallback); sent × 10 to keep one decimal as an integer (e.g. 32 = 3.2 GHz). Decoded on the firmware side by dividing by 10.
 - **Package power (`CPWR`)**: read from `power1_average` of the amdgpu hwmon (PPT), RAPL as fallback. See [Power measurement (wattage)](#power-measurement-wattage).
 - **LVGL %f**: `lv_snprintf` (LVGL 8.3) does not support `%f`. All float values are converted to integers before formatting (`(int)(val + 0.5f)`).
-- **VRAM source**: `/sys/class/drm/card1/device/mem_info_vram_used` and `mem_info_vram_total` (amdgpu driver, no ROCm needed). Like `gpu_busy_percent` and the amdgpu hwmon, these paths are resolved at startup; if the driver is not ready yet (service started at boot before amdgpu finished initializing), the script looks for them again every 5 s.
+- **VRAM source**: `/sys/class/drm/card*/device/mem_info_vram_used` and `mem_info_vram_total` (`card1` on this NUC, amdgpu driver, no ROCm needed). Like `gpu_busy_percent` and the amdgpu hwmon, these paths are resolved at startup; if the driver is not ready yet (service started at boot before amdgpu finished initializing), the script looks for them again every 5 s.
 - **NVMe temp**: `/sys/class/nvme/nvme0/hwmon*/temp1_input` (millidegrees → divided by 1000).
 - **VPN detection**: `psutil.net_if_stats()`, 1×/s (`_VPN_INTERVAL`), value cached in between. Criteria, compatibility and limits: see [VPN detection](#vpn-detection).
 - **WiFi**: SSID and signal strength of the active access point are read from NetworkManager on the system D-Bus (`Device.Wireless.ActiveAccessPoint` → `AccessPoint.Ssid` / `Strength`), every 5 s (`_WIFI_INTERVAL`): NetworkManager only refreshes the strength when it scans. Previously, the script ran `nmcli` 4×/s: more than half of the service's CPU went into these processes, and `nmcli` sometimes took several seconds to answer (empty SSID). `nmcli` is now only a fallback if `python3-dbus` is missing, run with `LC_ALL=C` so as not to depend on the language (`yes`/`oui`).
 - **Temperatures**: `CTEMP` is read directly from the `k10temp` hwmon file (`Tctl`), resolved at startup; `psutil.sensors_temperatures()`, which rereads every sensor (~2 ms), is only a fallback.
-- **Send loop**: between passes, the script sleeps in `select()` until the next deadline (main frame, `P:` frame, standby check, icon), an `?I:` request from the ESP32 or room in the output FIFO (max 0.25 s). About 20 wake-ups/s instead of 100 with the former `sleep(0.01)`. The port is only read when `select()` reports it readable: in raw mode (`VMIN=0`), `read()` returns 0 bytes when there is nothing to read, and 0 bytes after "readable" means the port hung up (unplug → reconnect).
+- **Send loop**: between passes, the script sleeps in `select()` until the next deadline (main frame, `P:` frame, standby check, icon), an `?I:` request from the ESP32 or room in the output FIFO (max 0.25 s). About 6 wake-ups/s instead of 100 with the former `sleep(0.01)`. The port is only read when `select()` reports it readable: in raw mode (`VMIN=0`), `read()` returns 0 bytes when there is nothing to read, and 0 bytes after "readable" means the port hung up (unplug → reconnect).
 - **CPU cost**: ~2 % of one thread for the whole service (measured over 30 s), with no child process. To measure it: compare `usage_usec` in `/sys/fs/cgroup/system.slice/nuc-monitor.service/cpu.stat` a few minutes apart (`top` does not show the CPU of child processes).
 - **PWM backlight**: backlight on `TFT_BL` (GPIO 1) via LEDC, channel 0, 5 kHz, 8-bit. `BL_BRIGHTNESS = 153` ≈ 60 % in `sys_monitor.ino`; change this value to adjust brightness (0–255).
 - **Display DMA counters**: `transfer_num` (DMA transactions in flight) and `lcd_PushColors_len` (pixels left to queue) are modified both by `lcd_PushColors()` and by the end-of-transaction interrupt `spi_dma_cd()`, which runs on the same core as `loop()`. On the task side, they are updated with interrupts masked (`portSET_INTERRUPT_MASK_FROM_ISR()`). Without this masking, an interrupt landing in the middle of `transfer_num++` lost a decrement: the counter stayed at 1, `loop()` stopped calling `lv_timer_handler()` (frozen screen, touch ignored) and the next standby got stuck in `screen_sleep()`, backlight on. The freeze happened at random, after a few hours or days.
@@ -518,8 +518,8 @@ The `CPU:` (0.25 s), `P:` (1 s) and `I:` (on request) frames do not interfere:
 - **SSD2 throughput**: same computation as for SSD1 (`/proc/diskstats` via `psutil.disk_io_counters(perdisk=True)`, difference between two frames), on the disk picked by `_scan_ssd_devices()`. The ASMedia ASM235C USB-SATA bridge (`uas` driver, `/dev/sdX`) does count reads and writes; writes show up late, as on any disk: the kernel caches them and only writes them out after 30 s at most (`vm.dirty_expire_centisecs`), or earlier on `sync`.
 - **SSD detection**: `_scan_ssd_devices()` keeps devices with `size ≥ 1 GB` to exclude 0-byte disks (USB card reader with no card). The NVMe is always picked first, then fixed disks before removable ones (`/sys/class/block/<dev>/removable`), so that a USB stick does not take SSD2's place. The USB disk name is not stable: a USB bus reset renumbers it (observed: `sdc` → `sda` during a session), and it is only automounted when the user session opens, after the service has started. Every 5 s, `_recheck_ssd_devices()` therefore checks that two disks are present, that each still has the same sysfs path and that its mount point is mounted (a few `stat` calls, ~0.15 ms); otherwise it runs the detection again (~0.6 ms) and logs `Disques re-détectés : …` if the result changed. Until SSD2 is mounted, its capacity is sent as 0 (`--/-- GB`) instead of the root filesystem's.
 - **Python polling interval**: 0.25 s by default in `monitor_sender.py`. Configurable with `--interval`.
-- **ESP32 screen standby**: every second, the script reads `PowerSaveMode` of `org.gnome.Mutter.DisplayConfig` on the session D-Bus (`/run/user/<uid>/bus`, reachable by the service because it runs as the session user): this is the real DPMS state of the NUC's screen (0 = on, 3 = off), which turns off after the GNOME "Blank screen" delay (`org.gnome.desktop.session idle-delay`, 600 s here). `--sleep-delay` s after it turns off (600 s by default, i.e. ~20 min of total inactivity), the script sends `SCR:0`: the ESP32 turns off the backlight, puts the AXS15231B to sleep (`0x28` + `0x10`) and stops LVGL rendering (data is still received and applied). As soon as mouse/keyboard turn the NUC's screen back on (including on the lock screen), `SCR:1` is sent immediately → wake-up in ≤ 1 s (`0x11`, 120 ms, `0x29` + full redraw). `ScreenSaver.Active` is not used because it stays true while the lock screen is shown. Without a GNOME session (boot, greeter), the state is unknown and the screen stays on; if the PC sends nothing for 5 s, the ESP32 wakes up to show "En attente du PC..." (waiting for the PC). During standby, the ESP32 stays awake (no deep/light sleep) because it must keep listening on USB CDC. Quick test: `python tools/monitor_sender.py --sleep-delay 10` then `xset dpms force off`.
-- **Mouse / keyboard batteries**: read via `org.freedesktop.UPower` on the system D-Bus (`EnumerateDevices` then the `Percentage`, `State`, `Model`, `Type` properties), without root: UPower already aggregates the Logitech HID++ receiver (MX Anywhere 3S mouse, `hidpp_battery_*`) and BlueZ (K780 keyboard over Bluetooth). Only devices with `PowerSupply == false` and `IsPresent == true` are kept. UPower reports **both** as `Type = 6` (keyboard), hence sorting by model name (`keyboard|clavier|K###` → keyboard, `mouse|souris|MX Anywhere/Master/Vertical|M###` → mouse), `Type` only being a fallback. Read throttled to 1×/60 s (`_PERIPH_BAT_INTERVAL`). On screen, two columns on either side of the GPU arc (`KB` on the left, `MS` on the right): LVGL battery icon (`LV_SYMBOL_BATTERY_FULL/3/2/1/EMPTY`, or `LV_SYMBOL_CHARGE` when charging) + %, colored green (≥ 60 %), yellow (≥ 35 %), orange (≥ 15 %) or red (< 15 %). The Bluetooth keyboard % is the one stored by BlueZ: it is only updated when the keyboard sends it (infrequently), and stays shown even with the keyboard off.
+- **ESP32 screen standby**: every second, the script reads `PowerSaveMode` of `org.gnome.Mutter.DisplayConfig` on the session D-Bus (`/run/user/<uid>/bus`, reachable by the service because it runs as the session user): this is the real DPMS state of the NUC's screen (0 = on, 3 = off), which turns off after the GNOME "Blank screen" delay (`org.gnome.desktop.session idle-delay`, 720 s here). `--sleep-delay` s after it turns off (600 s by default, i.e. ~22 min of total inactivity here), the script sends `SCR:0`: the ESP32 turns off the backlight, puts the AXS15231B to sleep (`0x28` + `0x10`) and stops LVGL rendering (data is still received and applied). As soon as mouse/keyboard turn the NUC's screen back on (including on the lock screen), `SCR:1` is sent immediately → wake-up in ~1 s (`0x11`, 120 ms, `0x29` + full redraw). `ScreenSaver.Active` is not used because it stays true while the lock screen is shown. Without a GNOME session (boot, greeter), the state is unknown and the screen stays on; if the PC sends nothing for 5 s, the ESP32 wakes up to show "En attente du PC..." (waiting for the PC). During standby, the ESP32 stays awake (no deep/light sleep) because it must keep listening on USB CDC. Quick test: `python3 tools/monitor_sender.py --sleep-delay 10` then `xset dpms force off`.
+- **Mouse / keyboard batteries**: read via `org.freedesktop.UPower` on the system D-Bus (`EnumerateDevices` then the `Percentage`, `State`, `Model`, `Type` properties), without root: UPower already aggregates the `logitech-hidpp` kernel driver (MX Anywhere 3S mouse over Bluetooth, `hidpp_battery_*`) and BlueZ (K780 keyboard over Bluetooth). Only devices with `PowerSupply == false` and `IsPresent == true` are kept. UPower reports **both** as `Type = 6` (keyboard), hence sorting by model name (`keyboard|clavier|K###` → keyboard, `mouse|souris|MX Anywhere/Master/Vertical|M###` → mouse), `Type` only being a fallback. Read throttled to 1×/60 s (`_PERIPH_BAT_INTERVAL`), with D-Bus calls limited to 1 s. An idle Bluetooth keyboard or mouse can disconnect and disappear from UPower, then reconnect at the moment it turns the screen back on: the last known value is therefore kept for 24 h (`_PERIPH_BAT_HOLD`, without the charging indicator) and the NUC screen turning back on triggers an immediate read, then one every 2 s for 15 s. The transient `0 %` + unknown state of a device being registered is ignored, and each disappearance or return is written to the service log (`Pile clavier` / `Pile souris` lines). On screen, two columns on either side of the GPU arc (`KB` on the left, `MS` on the right): LVGL battery icon (`LV_SYMBOL_BATTERY_FULL/3/2/1/EMPTY`, or `LV_SYMBOL_CHARGE` when charging) + %, colored green (≥ 60 %), yellow (≥ 35 %), orange (≥ 15 %) or red (< 15 %). The Bluetooth keyboard % is the one stored by BlueZ: it is only updated when the keyboard sends it (infrequently). With the keyboard off, its last value stays shown for 24 h.
 
 ---
 
@@ -533,7 +533,7 @@ The `CPU:` (0.25 s), `P:` (1 s) and `I:` (on request) frames do not interfere:
 → If the screen freezes after hours of operation (touch and BOOT button ignored, backlight staying on in standby): firmware older than the DMA counter fix (see [Notable technical points](#notable-technical-points)), reflash it with `bash tools/deploy.sh`.
 
 **The green LED blinks without a battery**
-→ Normal; the firmware sends `reg 0x09 = 0x64` to the BQ25896 to turn it off at boot.
+→ Normal; the firmware sends `reg 0x09 = 0x64` to the SY6970 to turn it off at boot.
 
 **The systemd service does not exist / did not start after a reboot**
 → The install script has not been run yet. Run it once:
@@ -550,7 +550,7 @@ sudo systemctl status nuc-monitor
 → Check the preflight line `Veille écran` in `sudo journalctl -u nuc-monitor`: if it shows `n/a`, the session D-Bus or Mutter is not reachable (no GNOME session open, or `python3-dbus` missing). Also check that GNOME does turn the screen off (Settings → Power → "Blank screen") and that `--sleep-delay` is not `0`. Test: `busctl --user get-property org.gnome.Mutter.DisplayConfig /org/gnome/Mutter/DisplayConfig org.gnome.Mutter.DisplayConfig PowerSaveMode` should return `i 3` after `xset dpms force off`.
 
 **Mouse/keyboard batteries do not show (empty columns next to the GPU arc)**
-→ Check that UPower sees the devices: `upower -d` should list the mouse (`hidpp_battery_*`) and the keyboard (`keyboard_dev_*`) with a `percentage`. If a device is listed but shown on the wrong side, its model name does not match the `_KBD_MODEL_RE` / `_MOUSE_MODEL_RE` patterns of `monitor_sender.py`: extend them. Values are refreshed every 60 s, so wait up to 1 min after a change (plugged in to charge, keyboard turned back on).
+→ Check that UPower sees the devices: `upower -d` should list the mouse (`hidpp_battery_*`) and the keyboard (`keyboard_dev_*`) with a `percentage`. If a device is listed but shown on the wrong side, its model name does not match the `_KBD_MODEL_RE` / `_MOUSE_MODEL_RE` patterns of `monitor_sender.py`: extend them. Values are refreshed every 60 s, so wait up to 1 min after a change (plugged in to charge, keyboard turned back on). As long as the PC is sending (otherwise the screen shows `En attente du PC...` and empties the columns), a column is only emptied if the device has never been seen since the service started or has not been seen again for 24 h: `sudo journalctl -u nuc-monitor | grep Pile` shows its disappearances and returns.
 
 **The WiFi SSID is empty or the signal stays at 0**
 → Check that NetworkManager sees the access point: `busctl get-property org.freedesktop.NetworkManager /org/freedesktop/NetworkManager org.freedesktop.NetworkManager Devices` then, on the WiFi device, `ActiveAccessPoint` (`/` = not connected). Values are refreshed every 5 s: wait up to 5 s after a reconnection. Without `python3-dbus`, the script falls back to `nmcli`.

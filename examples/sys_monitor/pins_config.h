@@ -21,7 +21,7 @@
 #define TFT_QSPI_RST          16
 #define TFT_BL                1
 
-// Tactile CST3530 (I2C, partagé avec le chargeur BQ25896 en 0x6A)
+// Tactile CST3530 (I2C, partagé avec le chargeur SY6970 en 0x6A)
 #define TOUCH_IICSCL          10
 #define TOUCH_IICSDA          15
 #define TOUCH_INT             11

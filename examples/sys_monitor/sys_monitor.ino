@@ -139,7 +139,7 @@ void setup() {
     axs15231_init();   // se termine par 300 ms d'attente après le reset (GPIO16)
     pinMode(PIN_BUTTON_1, INPUT_PULLUP);   // bouton BOOT : bascule écran 1 ⇄ 2
 
-    // BQ25896 : stoppe le clignotement de la LED verte sans batterie
+    // SY6970 : stoppe le clignotement de la LED verte sans batterie
     // (reg 0x09 bit5 = BATFET_DIS)
     Wire.beginTransmission(0x6A);
     Wire.write(0x00); Wire.write(0x3F);

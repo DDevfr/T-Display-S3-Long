@@ -13,9 +13,9 @@ Dépendances :
     Pillow (python3-pil) pour les icônes de l'écran 2 — optionnel
 
 Usage :
-    python monitor_sender.py                      # auto-détecte /dev/ttyACM*
-    python monitor_sender.py --port /dev/ttyACM0
-    python monitor_sender.py --port /dev/ttyACM0 --interval 0.5
+    python3 monitor_sender.py                     # auto-détecte /dev/ttyACM*
+    python3 monitor_sender.py --port /dev/ttyACM0
+    python3 monitor_sender.py --port /dev/ttyACM0 --interval 0.5
 """
 
 import argparse
@@ -760,48 +760,105 @@ _KBD_MODEL_RE   = re.compile(r'keyboard|clavier|\bK\d{3}\b', re.I)
 _MOUSE_MODEL_RE = re.compile(r'mouse|souris|MX (Anywhere|Master|Vertical)|\bM\d{3}\b', re.I)
 _UPOWER_TYPE_MOUSE    = 5
 _UPOWER_TYPE_KEYBOARD = 6
+_UPOWER_STATE_UNKNOWN  = 0
 _UPOWER_STATE_CHARGING = 1
 _PERIPH_BAT_CACHE      = (255, 0, 255, 0)
 _PERIPH_BAT_NEXT       = 0.0
 _PERIPH_BAT_INTERVAL   = 60.0   # s — niveaux de pile qui bougent lentement
+_PERIPH_BAT_FAST_INTERVAL = 2.0    # s entre deux lectures juste après un réveil
+_PERIPH_BAT_FAST_WINDOW   = 15.0   # s de lecture rapide (reconnexion Bluetooth)
+_PERIPH_BAT_FAST_UNTIL    = 0.0
+_PERIPH_BAT_HOLD       = 86400.0   # s de conservation d'une valeur non revue
+_PERIPH_BAT_LAST: dict[str, tuple[int, float]] = {}   # nom → (%, dernière lecture)
+_PERIPH_BAT_MISSING: set[str] = set()                 # noms actuellement non vus
 
 
-def get_peripheral_batteries() -> tuple[int, int, int, int]:
-    """(clavier %, clavier en charge, souris %, souris en charge).
-    % = 255 si périphérique absent ou UPower indisponible."""
-    global _PERIPH_BAT_CACHE, _PERIPH_BAT_NEXT
+def request_peripheral_refresh() -> None:
+    """Relit les piles tout de suite puis toutes les 2 s pendant 15 s : le clavier
+    et la souris Bluetooth se reconnectent au moment où ils rallument l'écran."""
+    global _PERIPH_BAT_NEXT, _PERIPH_BAT_FAST_UNTIL
     now = time.monotonic()
-    if now < _PERIPH_BAT_NEXT:
-        return _PERIPH_BAT_CACHE
-    _PERIPH_BAT_NEXT = now + _PERIPH_BAT_INTERVAL
+    _PERIPH_BAT_NEXT       = now
+    _PERIPH_BAT_FAST_UNTIL = now + _PERIPH_BAT_FAST_WINDOW
 
-    kbd, mouse = (255, 0), (255, 0)
+
+def _read_upower_batteries() -> dict[str, tuple[int, int]]:
+    """{'clavier'/'souris': (%, en charge)} pour les périphériques lisibles.
+    Une erreur sur un périphérique (retiré pendant la lecture) n'affecte pas l'autre."""
+    found: dict[str, tuple[int, int]] = {}
     if not _ensure_dbus_bus():
-        _PERIPH_BAT_CACHE = (*kbd, *mouse)
-        return _PERIPH_BAT_CACHE
+        return found
     try:
         upower = _DBUS_SYSBUS.get_object('org.freedesktop.UPower',
-                                         '/org/freedesktop/UPower')
-        paths = dbus.Interface(upower, 'org.freedesktop.UPower').EnumerateDevices()
-        for path in paths:
-            dev   = _DBUS_SYSBUS.get_object('org.freedesktop.UPower', path)
+                                         '/org/freedesktop/UPower', introspect=False)
+        paths = dbus.Interface(upower, 'org.freedesktop.UPower') \
+                    .EnumerateDevices(timeout=1.0)
+    except Exception:
+        return found
+    for path in paths:
+        try:
+            dev   = _DBUS_SYSBUS.get_object('org.freedesktop.UPower', path,
+                                            introspect=False)
             props = dbus.Interface(dev, 'org.freedesktop.DBus.Properties') \
-                        .GetAll('org.freedesktop.UPower.Device')
+                        .GetAll('org.freedesktop.UPower.Device', timeout=1.0)
             if props.get('PowerSupply', True) or not props.get('IsPresent', False):
                 continue
             model = str(props.get('Model', ''))
             dtype = int(props.get('Type', 0))
-            entry = (max(0, min(100, int(round(float(props.get('Percentage', 0)))))),
-                     int(int(props.get('State', 0)) == _UPOWER_STATE_CHARGING))
-            if _KBD_MODEL_RE.search(model):
-                kbd = entry
-            elif _MOUSE_MODEL_RE.search(model) or dtype == _UPOWER_TYPE_MOUSE:
-                mouse = entry
-            elif dtype == _UPOWER_TYPE_KEYBOARD:
-                kbd = entry
-    except Exception:
-        pass
-    _PERIPH_BAT_CACHE = (*kbd, *mouse)
+            state = int(props.get('State', 0))
+            pct   = max(0, min(100, int(round(float(props.get('Percentage', 0))))))
+        except Exception:
+            continue
+        if pct == 0 and state == _UPOWER_STATE_UNKNOWN:
+            continue   # périphérique en cours d'enregistrement : pas encore de niveau
+        entry = (pct, int(state == _UPOWER_STATE_CHARGING))
+        if _KBD_MODEL_RE.search(model):
+            found['clavier'] = entry
+        elif _MOUSE_MODEL_RE.search(model) or dtype == _UPOWER_TYPE_MOUSE:
+            found['souris'] = entry
+        elif dtype == _UPOWER_TYPE_KEYBOARD:
+            found['clavier'] = entry
+    return found
+
+
+def _battery_or_last(name: str, entry: tuple[int, int] | None,
+                     now: float) -> tuple[int, int]:
+    """Valeur lue, sinon dernière valeur connue (sans charge) pendant _PERIPH_BAT_HOLD :
+    un périphérique Bluetooth inactif se déconnecte et disparaît d'UPower."""
+    last = _PERIPH_BAT_LAST.get(name)
+    if entry is not None:
+        if name in _PERIPH_BAT_MISSING:
+            _PERIPH_BAT_MISSING.discard(name)
+            print(f"Pile {name} : revue par UPower ({entry[0]} %)", flush=True)
+        _PERIPH_BAT_LAST[name] = (entry[0], now)
+        return entry
+    if last is None:
+        return (255, 0)
+    if now - last[1] >= _PERIPH_BAT_HOLD:
+        del _PERIPH_BAT_LAST[name]
+        _PERIPH_BAT_MISSING.discard(name)
+        print(f"Pile {name} : non revue depuis 24 h, colonne vidée", flush=True)
+        return (255, 0)
+    if name not in _PERIPH_BAT_MISSING:
+        _PERIPH_BAT_MISSING.add(name)
+        print(f"Pile {name} : absente d'UPower, dernière valeur conservée "
+              f"({last[0]} %)", flush=True)
+    return (last[0], 0)
+
+
+def get_peripheral_batteries() -> tuple[int, int, int, int]:
+    """(clavier %, clavier en charge, souris %, souris en charge).
+    % = 255 si périphérique jamais vu ou non revu depuis _PERIPH_BAT_HOLD."""
+    global _PERIPH_BAT_CACHE, _PERIPH_BAT_NEXT
+    now = time.monotonic()
+    if now < _PERIPH_BAT_NEXT:
+        return _PERIPH_BAT_CACHE
+    _PERIPH_BAT_NEXT = now + (_PERIPH_BAT_FAST_INTERVAL if now < _PERIPH_BAT_FAST_UNTIL
+                              else _PERIPH_BAT_INTERVAL)
+
+    found = _read_upower_batteries()
+    _PERIPH_BAT_CACHE = (*_battery_or_last('clavier', found.get('clavier'), now),
+                         *_battery_or_last('souris', found.get('souris'), now))
     return _PERIPH_BAT_CACHE
 
 
@@ -1248,6 +1305,7 @@ def run(port: str, baud: int, interval: float, sleep_delay: float) -> None:
                         elif display_off_since is not None:
                             display_off_since = None
                             print("Écran NUC rallumé", flush=True)
+                            request_peripheral_refresh()
                         new_on = int(display_off_since is None
                                      or now - display_off_since < sleep_delay)
                         if new_on != screen_on:
@@ -1296,7 +1354,7 @@ def run(port: str, baud: int, interval: float, sleep_delay: float) -> None:
                     _flush(fd, out_buf)
 
                     # Dort jusqu'à la prochaine échéance, une demande ?I: de l'ESP32
-                    # ou de la place dans le FIFO de sortie : ~20 réveils/s au lieu
+                    # ou de la place dans le FIFO de sortie : ~6 réveils/s au lieu
                     # de 100 avec un sleep(0.01) fixe.
                     deadlines = [next_send, next_procs]
                     if sleep_delay > 0:
